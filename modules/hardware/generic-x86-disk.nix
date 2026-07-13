@@ -8,16 +8,15 @@
   nixpkgs.hostPlatform = "x86_64-linux";
   hardware.enableRedistributableFirmware = true;
 
-  # GRUB EFI installed at the *removable* fallback path (\EFI\BOOT\BOOTX64.EFI).
+  # systemd-boot installed at the *removable* fallback path (\EFI\BOOT\BOOTX64.EFI).
   # ODROID H2-class firmware won't auto-boot a bootloader from a fixed SATA disk
   # via an NVRAM entry alone, but it does honour the removable fallback — the
   # same mechanism that makes USB media boot. This is the crux of the fix.
-  boot.loader.grub = {
-    enable = true;
-    efiSupport = true;
-    efiInstallAsRemovable = true;
-    devices = [ "nodev" ];
-  };
+  #
+  # `bootctl install` copies systemd-bootx64.efi to the removable fallback path
+  # automatically, so no separate "install as removable" knob is needed. With
+  # canTouchEfiVariables = false it installs with --no-variables (no NVRAM entry).
+  boot.loader.systemd-boot.enable = true;
   boot.loader.efi.canTouchEfiVariables = false;
 
   # Enough to bring up SATA/NVMe/USB storage and HID in early boot.
