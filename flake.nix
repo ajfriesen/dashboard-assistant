@@ -7,9 +7,13 @@
     # Wired for the future on-disk install path (tmpfs root + ext4 /persist).
     # Not heavily used yet: the live ISO already provides an ephemeral root.
     impermanence.url = "github:nix-community/impermanence";
+
+    # Declarative btrfs+zstd disk layout + image builder for the on-disk target.
+    disko.url = "github:nix-community/disko";
+    disko.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = { self, nixpkgs, impermanence }:
+  outputs = { self, nixpkgs, impermanence, disko }:
     let
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
@@ -37,22 +41,18 @@
           inherit system;
           specialArgs = { inherit impermanence; };
           modules = [
+            disko.nixosModules.disko
             ./modules/hardware/generic-x86-disk.nix
             ./modules/core/default.nix
           ] ++ localModules;
         };
       };
 
-      # Raw EFI disk image: `nix build .#disk-image` (or `just build-disk`),
-      # then dd result/nixos.img to the SSD.
-      packages.${system}.disk-image = import "${nixpkgs}/nixos/lib/make-disk-image.nix" {
-        inherit lib pkgs;
-        config = self.nixosConfigurations.dashboard-x86-disk.config;
-        partitionTableType = "efi";
-        format = "raw";
-        diskSize = 10240;
-        label = "nixos";
-      };
+      # Raw btrfs+zstd EFI disk image built by disko: `nix build .#disk-image`
+      # (or `just build-disk`), then dd result/ha-dashboard.raw to the SSD. The
+      # layout lives in modules/hardware/disk-layout.nix.
+      packages.${system}.disk-image =
+        self.nixosConfigurations.dashboard-x86-disk.config.system.build.diskoImages;
 
       devShells.${system}.default = pkgs.mkShell {
         packages = [

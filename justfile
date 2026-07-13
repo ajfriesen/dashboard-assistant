@@ -1,14 +1,14 @@
 build-image:
   nix build .#nixosConfigurations.dashboard-x86.config.system.build.isoImage
 
-# Build the installable raw disk image (for a fixed SATA/NVMe disk, e.g. ODROID
-# H2). dd result/nixos.img to the SSD, then boot it from the native SATA port.
+# Build the installable raw disk image (btrfs+zstd, built by disko). dd
+# result/ha-dashboard.raw to the SSD, then boot it from the native SATA port.
 build-disk:
   nix build .#disk-image
   @echo
-  @echo "Image: $(readlink -f result)/nixos.img"
+  @echo "Image: $(readlink -f result)/ha-dashboard.raw"
   @echo "Flash it (confirm the device first!):"
-  @echo "  sudo dd if=$(readlink -f result)/nixos.img of=/dev/sdX bs=4M oflag=sync conv=fsync status=progress"
+  @echo "  sudo dd if=$(readlink -f result)/ha-dashboard.raw of=/dev/sdX bs=4M oflag=sync conv=fsync status=progress"
 
 # Boot the built ISO. The virtio-net NIC gets DHCP from QEMU's user-mode
 # network, so NetworkManager auto-connects it — first boot lands in the setup
