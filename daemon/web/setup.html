@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>HA Dashboard — Setup</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: system-ui, sans-serif; background: #10151c; color: #e8edf2;
+      display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 5vh 4vw;
+    }
+    .card { width: 100%; max-width: 560px; }
+    h1 { font-size: 1.6rem; margin: 0 0 1.5rem; }
+    label { display: block; margin: 1rem 0 .35rem; font-size: .95rem; color: #9fb0c0; }
+    input, select, button {
+      width: 100%; font-size: 1.15rem; padding: .85rem 1rem; border-radius: 12px;
+      border: 1px solid #2a3644; background: #182029; color: #e8edf2;
+    }
+    button {
+      margin-top: 1.75rem; background: #2f81f7; border-color: #2f81f7; color: #fff;
+      font-weight: 600; touch-action: manipulation;
+    }
+    button:disabled { opacity: .5; }
+    .row { display: flex; gap: .5rem; align-items: end; }
+    .row select { flex: 1; }
+    .row button { width: auto; margin-top: 0; padding: .85rem 1.1rem; background: #263241; border-color: #2a3644; }
+    .banner {
+      display: flex; align-items: center; gap: .6rem; padding: .8rem 1rem; border-radius: 12px;
+      background: #14251a; border: 1px solid #1f4d31; color: #4ade80; font-size: .95rem;
+    }
+    .banner.hidden { display: none; }
+    .toggle { margin-top: .9rem; }
+    .toggle a { color: #6ea8fe; text-decoration: none; font-size: .9rem; cursor: pointer; }
+    .hidden { display: none; }
+    .msg { margin-top: 1rem; min-height: 1.4rem; font-size: .95rem; }
+    .msg.err { color: #ff6b6b; }
+    .msg.ok { color: #4ade80; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Set up your dashboard</h1>
+
+    <div id="banner" class="banner hidden"></div>
+
+    <div id="wifiFields" class="hidden">
+      <label for="ssid">Wi-Fi network</label>
+      <div class="row">
+        <select id="ssid"><option value="">Scanning…</option></select>
+        <button id="rescan" type="button">Rescan</button>
+      </div>
+
+      <label for="psk">Wi-Fi password</label>
+      <input id="psk" type="password" autocomplete="off" placeholder="Leave blank for open networks">
+    </div>
+
+    <div id="toggle" class="toggle hidden"></div>
+
+    <label for="haurl">Home Assistant address</label>
+    <input id="haurl" type="url" inputmode="url" value="http://homeassistant.local:8123">
+
+    <button id="submit" type="button">Connect</button>
+    <div id="msg" class="msg"></div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const msg = (text, cls) => { const m = $("msg"); m.textContent = text; m.className = "msg " + (cls || ""); };
+
+    // mode: "existing" (use current/wired connection) or "wifi" (join a network).
+    let mode = "wifi";
+    let net = { connected: false, has_wifi: true, type: "", name: "" };
+
+    function render() {
+      const useWifi = mode === "wifi";
+      $("wifiFields").classList.toggle("hidden", !useWifi);
+
+      const banner = $("banner");
+      if (net.connected) {
+        banner.classList.remove("hidden");
+        banner.textContent = "✓ Connected via " + (net.type || "network") +
+          (net.name ? " (" + net.name + ")" : "");
+      } else {
+        banner.classList.add("hidden");
+      }
+
+      // Offer a toggle only when both paths are actually available.
+      const toggle = $("toggle");
+      if (net.connected && net.has_wifi) {
+        toggle.classList.remove("hidden");
+        toggle.innerHTML = useWifi
+          ? '<a id="useExisting">Use the current connection instead</a>'
+          : '<a id="useWifi">Set up Wi-Fi instead</a>';
+        const alt = document.getElementById(useWifi ? "useExisting" : "useWifi");
+        alt.onclick = () => { mode = useWifi ? "existing" : "wifi"; render(); };
+      } else {
+        toggle.classList.add("hidden");
+      }
+
+      $("submit").textContent = useWifi ? "Connect" : "Finish";
+      if (useWifi) scan();
+    }
+
+    async function loadNetInfo() {
+      try {
+        net = await (await fetch("/api/netinfo")).json();
+      } catch (_) { /* keep defaults */ }
+      // Default to the current connection when one exists; otherwise Wi-Fi.
+      // If there is no Wi-Fi device at all, force the existing-connection path.
+      if (net.connected && !net.has_wifi) mode = "existing";
+      else if (net.connected) mode = "existing";
+      else mode = net.has_wifi ? "wifi" : "existing";
+
+      if (!net.connected && !net.has_wifi) {
+        msg("No network detected. Attach an Ethernet cable, then reload.", "err");
+      }
+      render();
+    }
+
+    let scanned = false;
+    async function scan(force) {
+      if (scanned && !force) return;
+      scanned = true;
+      const sel = $("ssid");
+      sel.innerHTML = '<option value="">Scanning…</option>';
+      try {
+        const aps = await (await fetch("/api/wifi/scan")).json();
+        if (aps.error) throw new Error(aps.error);
+        sel.innerHTML = "";
+        for (const ap of aps) {
+          const o = document.createElement("option");
+          o.value = ap.ssid;
+          o.textContent = ap.ssid + (ap.secure ? " 🔒" : "") + "  (" + ap.strength + "%)";
+          sel.appendChild(o);
+        }
+        if (!aps.length) sel.innerHTML = '<option value="">No networks found</option>';
+      } catch (e) {
+        sel.innerHTML = '<option value="">Scan failed</option>';
+        msg("Wi-Fi scan failed: " + e.message, "err");
+      }
+    }
+
+    async function submit() {
+      const ha_url = $("haurl").value.trim();
+      if (!ha_url) return msg("Enter your Home Assistant address.", "err");
+
+      const body = { ha_url };
+      if (mode === "wifi") {
+        const ssid = $("ssid").value;
+        if (!ssid) return msg("Pick a Wi-Fi network.", "err");
+        body.ssid = ssid;
+        body.psk = $("psk").value;
+      }
+
+      $("submit").disabled = true;
+      msg("Connecting…");
+      try {
+        const res = await fetch("/api/provision", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        msg("Connected — launching your dashboard…", "ok");
+      } catch (e) {
+        msg("Could not connect: " + e.message, "err");
+        $("submit").disabled = false;
+      }
+    }
+
+    $("rescan").addEventListener("click", () => scan(true));
+    $("submit").addEventListener("click", submit);
+    loadNetInfo();
+  </script>
+</body>
+</html>

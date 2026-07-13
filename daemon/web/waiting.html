@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HA Dashboard — Reconnecting</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0; font-family: system-ui, sans-serif; background: #10151c; color: #e8edf2;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      min-height: 100vh; gap: 1.5rem; text-align: center; padding: 4vw;
+    }
+    .spinner {
+      width: 54px; height: 54px; border: 5px solid #263241; border-top-color: #2f81f7;
+      border-radius: 50%; animation: spin 1s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    h1 { font-size: 1.4rem; margin: 0; font-weight: 600; }
+    p { color: #9fb0c0; margin: 0; }
+    button {
+      margin-top: 1rem; font-size: 1rem; padding: .7rem 1.4rem; border-radius: 10px;
+      border: 1px solid #2a3644; background: #182029; color: #e8edf2; touch-action: manipulation;
+    }
+  </style>
+</head>
+<body>
+  <div class="spinner"></div>
+  <h1>Reconnecting to your network…</h1>
+  <p>The dashboard will appear automatically once the connection is back.</p>
+  <button id="reset" type="button">Re-run setup</button>
+
+  <script>
+    // Poll state; when READY, the kiosk unit gets restarted server-side, but
+    // reload as a fallback so the splash doesn't linger.
+    setInterval(async () => {
+      try {
+        const { state } = await (await fetch("/api/state")).json();
+        if (state === "READY") location.reload();
+      } catch (_) {}
+    }, 5000);
+
+    document.getElementById("reset").addEventListener("click", async () => {
+      await fetch("/api/reset", { method: "POST" });
+    });
+  </script>
+</body>
+</html>
