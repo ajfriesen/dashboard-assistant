@@ -61,6 +61,13 @@ func main() {
 	}
 	srv := &server{nm: nm}
 
+	// MQTT bridge to Home Assistant (opt-in: disabled unless MQTT_BROKER is set).
+	if cfg := mqttConfigFromEnv(); cfg.Broker != "" {
+		go newBridge(cfg, NewDisplay()).run()
+	} else {
+		log.Printf("mqtt: disabled (MQTT_BROKER unset)")
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeText(w, http.StatusOK, "ok")

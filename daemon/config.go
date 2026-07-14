@@ -15,7 +15,8 @@ const (
 	stateDir    = "/var/lib/dashboard"
 	runtimeEnv  = stateDir + "/runtime.env"
 	markerFile  = stateDir + "/provisioned"
-	sessionUnit = "greetd.service" // the Sway kiosk session; restart relaunches it
+	displayFifo = stateDir + "/display.fifo" // daemon writes on/off; kiosk agent applies via swaymsg
+	sessionUnit = "greetd.service"           // the Sway kiosk session; restart relaunches it
 )
 
 // Provisioned reports whether the device has ever completed setup. It is the

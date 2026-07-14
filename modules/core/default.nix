@@ -5,6 +5,7 @@
     "${modulesPath}/profiles/minimal.nix"
     ./kiosk.nix
     ./daemon.nix
+    ./mqtt.nix
     ./seed.nix
     ./debug.nix
     ./cleanup.nix

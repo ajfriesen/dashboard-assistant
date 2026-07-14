@@ -11,10 +11,9 @@ let
     version = "0.1.0";
     src = ../../daemon;
 
-    # godbus + golang.org/x/sys. Recompute after changing go.mod/go.sum with:
-    #   nix-build -E 'let p=import <nixpkgs>{}; in p.buildGoModule {
-    #     pname="x"; version="0"; src=./daemon; vendorHash=p.lib.fakeHash; }'
-    vendorHash = "sha256-Ac63bZlBvCrhS7b8mk7aJdApI8UGtJxnZG35L37roGY=";
+    # godbus + paho.mqtt + golang.org/x/*. Recompute after changing go.mod/go.sum
+    # by setting this to lib.fakeHash and reading the expected hash from the build.
+    vendorHash = "sha256-yNwlLdlLiTJe11CvtFavLARYQ7bVonN9z6CluHLnvUw=";
 
     meta.mainProgram = "ha-dashboard-api";
   };

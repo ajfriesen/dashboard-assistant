@@ -57,6 +57,24 @@ let
       $DEBUG_FLAGS
   '';
 
+  # Display power agent: the daemon (running as ha-dashboard) can't reach Sway's
+  # IPC socket under the kiosk user's 0700 runtime dir, so it writes "on"/"off"
+  # to a shared FIFO and this in-session loop applies it via swaymsg. Backs the
+  # MQTT "Display" light entity. The FIFO is created by tmpfiles (see below);
+  # the outer sleep just avoids a busy loop if it's briefly missing.
+  displayAgent = pkgs.writeShellScript "ha-display-agent" ''
+    fifo=/var/lib/dashboard/display.fifo
+    while true; do
+      while IFS= read -r cmd; do
+        case "$cmd" in
+          on)  ${pkgs.sway}/bin/swaymsg 'output * power on'  >/dev/null 2>&1 || true ;;
+          off) ${pkgs.sway}/bin/swaymsg 'output * power off' >/dev/null 2>&1 || true ;;
+        esac
+      done < "$fifo"
+      ${pkgs.coreutils}/bin/sleep 1
+    done
+  '';
+
   # Subscribe to Sway window events and force the browser back out of fullscreen
   # whenever it enters it — so the top-layer on-screen keyboard is never hidden.
   # Disabling fullscreen emits a fullscreen_mode:0 event, so this doesn't loop.
@@ -95,6 +113,9 @@ let
     # input-method-v2 (a layer-shell surface, hence Sway not Cage). It only pops
     # when Chromium advertises text-input — see --enable-wayland-ime above.
     exec ${pkgs.squeekboard}/bin/squeekboard
+
+    # Applies display on/off requests from the daemon (MQTT "Display" light).
+    exec ${displayAgent}
 
     # The dashboard/kiosk browser (--app; fills the single Sway workspace).
     exec ${kioskLauncher}
@@ -135,6 +156,8 @@ in
   # `dashboard` group (see default.nix).
   systemd.tmpfiles.rules = [
     "d /var/lib/dashboard 0775 ha-dashboard dashboard - -"
+    # FIFO the daemon writes display on/off to; the in-session agent reads it.
+    "p /var/lib/dashboard/display.fifo 0660 ha-dashboard dashboard - -"
   ];
 
   hardware.graphics.enable = true;
