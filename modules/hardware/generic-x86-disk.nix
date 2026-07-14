@@ -30,6 +30,11 @@
   nixpkgs.hostPlatform = "x86_64-linux";
   hardware.enableRedistributableFirmware = true;
 
+  # Grow the root partition to fill the actual disk in early boot. Paired with
+  # x-systemd.growfs on / (disk-layout.nix), a small 4G image expands to use the
+  # whole medium on first boot — so one image fits every board/tablet.
+  boot.growPartition = true;
+
   # systemd-boot installed at the *removable* fallback path (\EFI\BOOT\BOOTX64.EFI).
   # ODROID H2-class firmware won't auto-boot a bootloader from a fixed SATA disk
   # via an NVRAM entry alone, but it does honour the removable fallback — the

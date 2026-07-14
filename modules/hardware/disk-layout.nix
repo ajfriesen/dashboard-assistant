@@ -16,7 +16,11 @@
     type = "disk";
     device = "/dev/vda";
     imageName = "ha-dashboard";
-    imageSize = "10G";
+    # Small image: just big enough for the initial closure. It's grown to fill
+    # the real disk on first boot (boot.growPartition in generic-x86-disk.nix +
+    # the x-systemd.growfs mount option on / below), so flashing to a 16 GB
+    # tablet or a 500 GB SSD both end up using the whole disk.
+    imageSize = "4G";
     content = {
       type = "gpt";
       partitions = {
@@ -41,7 +45,9 @@
             subvolumes = {
               "/@" = {
                 mountpoint = "/";
-                mountOptions = [ "compress=zstd" "noatime" ];
+                # x-systemd.growfs: after the partition is grown, expand the
+                # btrfs to fill it (one resize grows the whole fs incl. @nix).
+                mountOptions = [ "compress=zstd" "noatime" "x-systemd.growfs" ];
               };
               "/@nix" = {
                 mountpoint = "/nix";
