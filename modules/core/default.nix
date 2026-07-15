@@ -6,6 +6,7 @@
     ./kiosk.nix
     ./daemon.nix
     ./mqtt.nix
+    ./configimport.nix
     ./seed.nix
     ./debug.nix
     ./cleanup.nix

@@ -11,13 +11,25 @@ import (
 )
 
 // State directory layout (shared group `dashboard`; daemon writes, kiosk reads).
-const (
-	stateDir    = "/var/lib/dashboard"
+// The base dir is overridable via DASHBOARD_STATE_DIR (defaults to the systemd
+// StateDirectory); handy for tests and relocating state.
+var stateDir = envOr("DASHBOARD_STATE_DIR", "/var/lib/dashboard")
+
+var (
 	runtimeEnv  = stateDir + "/runtime.env"
 	markerFile  = stateDir + "/provisioned"
+	tokenFile   = stateDir + "/token"        // long-lived HA token for kiosk login injection
 	displayFifo = stateDir + "/display.fifo" // daemon writes on/off; kiosk agent applies via swaymsg
-	sessionUnit = "greetd.service"           // the Sway kiosk session; restart relaunches it
 )
+
+const sessionUnit = "greetd.service" // the Sway kiosk session; restart relaunches it
+
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
 
 // Provisioned reports whether the device has ever completed setup. It is the
 // sticky bit that separates a fresh device (SETUP) from a set-up-but-offline
@@ -58,6 +70,17 @@ func writeHAURL(url string) error {
 		return err
 	}
 	return os.Rename(tmp, runtimeEnv)
+}
+
+// writeToken atomically stores the long-lived HA access token. Mode 0640: a
+// secret, but readable by the shared `dashboard` group (the kiosk that injects
+// it), unlike the group-writable runtime.env.
+func writeToken(tok string) error {
+	tmp := tokenFile + ".tmp"
+	if err := os.WriteFile(tmp, []byte(tok+"\n"), 0o640); err != nil {
+		return err
+	}
+	return os.Rename(tmp, tokenFile)
 }
 
 // markProvisioned drops the sticky marker. Also called by the flash-time seed.

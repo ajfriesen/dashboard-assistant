@@ -11,9 +11,9 @@ let
     version = "0.1.0";
     src = ../../daemon;
 
-    # godbus + paho.mqtt + golang.org/x/*. Recompute after changing go.mod/go.sum
+    # godbus + paho.mqtt + yaml.v3 + golang.org/x/*. Recompute after changing go.mod/go.sum
     # by setting this to lib.fakeHash and reading the expected hash from the build.
-    vendorHash = "sha256-yNwlLdlLiTJe11CvtFavLARYQ7bVonN9z6CluHLnvUw=";
+    vendorHash = "sha256-8ZidVTg6aky0IKiQ0upfnp1i+XItaFcBF/1EA9xAF2k=";
 
     meta.mainProgram = "ha-dashboard-api";
   };

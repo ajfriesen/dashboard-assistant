@@ -8,6 +8,7 @@ package main
 import (
 	"embed"
 	"encoding/json"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -82,6 +83,9 @@ func main() {
 	mux.Handle("/api/wifi/scan", loopbackOnly(http.HandlerFunc(srv.handleScan)))
 	mux.Handle("/api/provision", loopbackOnly(http.HandlerFunc(srv.handleProvision)))
 	mux.Handle("/api/reset", loopbackOnly(http.HandlerFunc(srv.handleReset)))
+	// Import a YAML config bundle (HA URL / token / Wi-Fi), fed by the USB and
+	// ESP importers. Loopback only, like the rest of the provisioning surface.
+	mux.Handle("/api/import", loopbackOnly(http.HandlerFunc(srv.handleImport)))
 
 	mux.HandleFunc("/", srv.handleRoot)
 
@@ -205,6 +209,34 @@ func (s *server) handleProvision(w http.ResponseWriter, r *http.Request) {
 			log.Printf("restart kiosk: %v", err)
 		}
 	}()
+}
+
+func (s *server) handleImport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST only"})
+		return
+	}
+	data, err := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // 1 MiB cap
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "read body"})
+		return
+	}
+	applied, err := s.applyImport(data)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	log.Printf("import applied: %v", applied)
+	writeJSON(w, http.StatusOK, map[string]any{"applied": applied})
+
+	// Relaunch the kiosk so it re-reads state (new URL / provisioned).
+	if len(applied) > 0 {
+		go func() {
+			if err := restartKiosk(); err != nil {
+				log.Printf("restart kiosk: %v", err)
+			}
+		}()
+	}
 }
 
 func (s *server) handleReset(w http.ResponseWriter, r *http.Request) {
