@@ -90,6 +90,16 @@ let
   # MQTT "Display" light entity. The FIFO is created by tmpfiles (see below);
   # the outer sleep just avoids a busy loop if it's briefly missing.
   displayAgent = pkgs.writeShellScript "ha-display-agent" ''
+    # Sway does not reap its exec'd children, so a kiosk restart orphans the
+    # previous session's agent (pointing at a now-dead Sway socket) and it keeps
+    # reading this shared FIFO. Two blocked readers on one FIFO are woken
+    # alternately, so the daemon's commands split between them and every other
+    # one is silently eaten by the dead agent — the classic "Off works but On
+    # doesn't" symptom. Kill any earlier instance so we are the sole reader.
+    for pid in $(${pkgs.procps}/bin/pgrep -f ha-display-agent); do
+      [ "$pid" = "$$" ] || kill "$pid" 2>/dev/null || true
+    done
+
     fifo=/var/lib/dashboard/display.fifo
     while true; do
       while IFS= read -r cmd; do
@@ -110,6 +120,12 @@ let
   # doesn't spam swaymsg during normal use. The kiosk user is in the `input`
   # group, so libinput can read /dev/input without root.
   wakeAgent = pkgs.writeShellScript "ha-wake-on-touch" ''
+    # Same leak as the display agent: kill any orphan from a prior session so we
+    # don't stack up a libinput reader per kiosk restart.
+    for pid in $(${pkgs.procps}/bin/pgrep -f ha-wake-on-touch); do
+      [ "$pid" = "$$" ] || kill "$pid" 2>/dev/null || true
+    done
+
     ${pkgs.libinput}/bin/libinput debug-events 2>/dev/null | while IFS= read -r _ev; do
       if [ -e ${displayOffFlag} ]; then
         ${pkgs.sway}/bin/swaymsg 'output * power on' >/dev/null 2>&1 || true
