@@ -10,6 +10,16 @@ build-disk:
   @echo "Flash it (confirm the device first!):"
   @echo "  sudo dd if=$(readlink -f result)/ha-dashboard.raw of=/dev/sdX bs=4M oflag=sync conv=fsync status=progress"
 
+# Build the Raspberry Pi 4 (aarch64) SD-card image. On an x86 host this builds
+# via binfmt emulation, fetching most from the binary cache — the Pi kernel +
+# image assembly still build locally, so it's slow. Then flash it to an SD card.
+build-rpi4:
+  nix build .#rpi4-image --out-link result-rpi4
+  @echo
+  @echo "Image: $(readlink -f result-rpi4)/sd-image/"*.img.zst
+  @echo "Flash it (confirm the device first!):"
+  @echo "  zstdcat result-rpi4/sd-image/*.img.zst | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync"
+
 # Boot the built ISO. The virtio-net NIC gets DHCP from QEMU's user-mode
 # network, so NetworkManager auto-connects it — first boot lands in the setup
 # wizard showing "Connected via ethernet" (the wired / existing-connection path).
