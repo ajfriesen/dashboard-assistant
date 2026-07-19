@@ -112,6 +112,9 @@ func main() {
 	// Pushable page list (setup UI) and navigation (waybar Prev/Next buttons).
 	mux.Handle("/api/urls", loopbackOnly(http.HandlerFunc(srv.handleURLs)))
 	mux.Handle("/api/nav", loopbackOnly(http.HandlerFunc(srv.handleNav)))
+	// Recovery: list bootable generations and roll back into one (reboots).
+	mux.Handle("/api/generations", loopbackOnly(http.HandlerFunc(srv.handleGenerations)))
+	mux.Handle("/api/rollback", loopbackOnly(http.HandlerFunc(srv.handleRollback)))
 
 	mux.HandleFunc("/", srv.handleRoot)
 
@@ -382,6 +385,46 @@ func (s *server) handleNav(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"page": s.pages.CurrentLabel()})
+}
+
+// handleGenerations lists the bootable NixOS generations for the recovery UI.
+func (s *server) handleGenerations(w http.ResponseWriter, r *http.Request) {
+	gens, err := listGenerations()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"generations": gens, "current": currentGeneration()})
+}
+
+// handleRollback boots into the requested generation (switches the profile and
+// reboots, via the privileged ha-rollback@ unit). POST {"generation": N}.
+func (s *server) handleRollback(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST only"})
+		return
+	}
+	var req struct {
+		Generation int `json:"generation"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad json"})
+		return
+	}
+	if !generationExists(req.Generation) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no such generation"})
+		return
+	}
+	if req.Generation == currentGeneration() {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "already the current generation"})
+		return
+	}
+	if err := bootGeneration(req.Generation); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	log.Printf("rollback: booting generation %d", req.Generation)
+	writeJSON(w, http.StatusOK, map[string]any{"state": "rebooting", "generation": req.Generation})
 }
 
 func (s *server) handleReset(w http.ResponseWriter, r *http.Request) {

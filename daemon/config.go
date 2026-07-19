@@ -152,6 +152,28 @@ func restartKiosk() error {
 	return nil
 }
 
+// bootGeneration triggers a rollback+reboot into NixOS generation n by starting
+// the templated ha-rollback@<n>.service (which switches the profile, runs the
+// generation's switch-to-configuration boot, and reboots — all as root). A
+// scoped polkit rule grants ha-dashboard rights to start just these units. The
+// number is validated by the caller and re-checked by the unit's script.
+func bootGeneration(n int) error {
+	conn, err := dbus.ConnectSystemBus()
+	if err != nil {
+		return fmt.Errorf("connect system bus: %w", err)
+	}
+	defer conn.Close()
+
+	unit := fmt.Sprintf("ha-rollback@%d.service", n)
+	systemd := conn.Object("org.freedesktop.systemd1", "/org/freedesktop/systemd1")
+	var job dbus.ObjectPath
+	err = systemd.Call("org.freedesktop.systemd1.Manager.StartUnit", 0, unit, "replace").Store(&job)
+	if err != nil {
+		return fmt.Errorf("StartUnit %s: %w", unit, err)
+	}
+	return nil
+}
+
 // ensureStateDir makes sure the state directory exists (systemd StateDirectory
 // normally handles this; belt-and-suspenders for direct runs).
 func ensureStateDir() error {

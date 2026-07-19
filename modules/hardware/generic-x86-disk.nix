@@ -50,6 +50,45 @@
   boot.loader.systemd-boot.configurationLimit = 3;
   boot.loader.efi.canTouchEfiVariables = false;
 
+  # Automatic Boot Assessment: a new generation boots with a counter and is only
+  # marked good once it reaches boot-complete.target; if it never does, across a
+  # few boots systemd-boot reverts to the previous generation. The safety net for
+  # updates so broken the box won't come up healthily — no network/daemon needed.
+  boot.loader.systemd-boot.bootCounting.enable = true;
+
+  # Gate "boot succeeded" on the dashboard actually being up: the boot is blessed
+  # only once the daemon answers /healthz and the kiosk session is active. So an
+  # update that crashes the daemon or the session fails to bless and auto-reverts.
+  # Deliberately NOT gated on the MQTT broker (which can be down for unrelated
+  # reasons) — a functional-but-buggy build (e.g. broken MQTT logic) still boots
+  # healthy here and is rolled back manually from the recovery UI instead.
+  systemd.services.ha-boot-health = {
+    description = "Gate boot success on the dashboard being healthy";
+    before = [ "boot-complete.target" ];
+    requiredBy = [ "boot-complete.target" ];
+    after = [ "ha-dashboard-daemon.service" ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      ExecStart = pkgs.writeShellScript "ha-boot-health" ''
+        # Wait up to ~3 min for the dashboard to come up healthy. Success blesses
+        # this boot; persistent failure lets systemd-boot revert on later boots.
+        i=0
+        while [ "$i" -lt 90 ]; do
+          if ${pkgs.curl}/bin/curl -fsS --max-time 3 http://localhost:8080/healthz >/dev/null 2>&1 \
+             && ${pkgs.systemd}/bin/systemctl is-active --quiet greetd.service; then
+            echo "dashboard healthy; blessing this boot"
+            exit 0
+          fi
+          i=$((i + 1))
+          ${pkgs.coreutils}/bin/sleep 2
+        done
+        echo "dashboard did not become healthy in time; not blessing this boot" >&2
+        exit 1
+      '';
+    };
+  };
+
   # Enough to bring up SATA/NVMe/USB storage and HID in early boot.
   boot.initrd.availableKernelModules = [
     "ahci"
