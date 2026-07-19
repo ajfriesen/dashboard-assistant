@@ -290,9 +290,9 @@ let
 
   # Brightness backend, resolved once per session. There is no single "dim the
   # screen" on Linux — it depends on the panel — so a resolver detects which of
-  # three tiers to use and stashes the choice in ${brightnessEnv}; the Dim/
-  # Brighter buttons (and, later, MQTT) just read that and act. Detection runs
-  # once because ddcutil probing is slow; per-click we only source a tiny file.
+  # three tiers to use and stashes the choice in ${brightnessEnv}; brightnessSet
+  # (driven by the HA brightness slider over MQTT) reads that and acts. Detection
+  # runs once because ddcutil probing is slow; per-set we only source a tiny file.
   #   backlight → /sys/class/backlight exists (internal eDP/tablet panel):
   #               brightnessctl, via the video-group udev rule.
   #   ddc       → external monitor speaking DDC/CI: ddcutil setvcp 10 (needs
@@ -302,11 +302,6 @@ let
   # dashboard.kiosk.brightness.method forces a tier; "auto" (default) detects.
   brightnessMethod = config.dashboard.kiosk.brightness.method;
   brightnessEnv = "/var/lib/dashboard/brightness.env";
-  # Last applied level (0..100), the single source of truth for readback. The
-  # backends differ in how (or whether) they report the current value, so we
-  # track it here instead: brightnessSet writes it, brightnessGet reads it, and
-  # it feeds both the Dim/Brighter steps and the brightness reported to HA.
-  brightnessValueFile = "/var/lib/dashboard/brightness.value";
 
   brightnessResolve = pkgs.writeShellScript "ha-brightness-resolve" ''
     set -u
@@ -345,9 +340,9 @@ let
 
     ${pkgs.coreutils}/bin/printf 'METHOD=%s\nDEVICE=%s\n' "$m" "$dev" > ${brightnessEnv}
 
-    # Seed the tracked level from the hardware where it can be read (backlight,
-    # DDC); software has no readback so assume full. Then report it so HA starts
-    # in sync after a session restart.
+    # Read the current level from the hardware where possible (backlight, DDC);
+    # software has no readback so assume full. Report it so the HA brightness
+    # slider starts in sync after a session restart.
     init=100
     case "$m" in
       backlight)
@@ -361,18 +356,7 @@ let
           init=$(( $4 * 100 / $5 ))
         fi ;;
     esac
-    ${pkgs.coreutils}/bin/printf '%s\n' "$init" > ${brightnessValueFile}
     ${reportDisplayState} bright "$init"
-  '';
-
-  # Read the tracked level (0..100). Missing file ⇒ assume full, so a query
-  # before the resolver finishes is harmless.
-  brightnessGet = pkgs.writeShellScript "ha-brightness-get" ''
-    if [ -r ${brightnessValueFile} ]; then
-      ${pkgs.coreutils}/bin/cat ${brightnessValueFile}
-    else
-      echo 100
-    fi
   '';
 
   # Set an absolute level (0..100) via whichever tier the resolver picked, and
@@ -406,36 +390,6 @@ let
         ${pkgs.systemd}/bin/busctl --user -- \
           set-property rs.wl-gammarelay / rs.wl.gammarelay Brightness d "$val" >/dev/null 2>&1 || true ;;
     esac
-
-    ${pkgs.coreutils}/bin/printf '%s\n' "$pct" > ${brightnessValueFile}
-  '';
-
-  # Step ±10% off the tracked level using brightnessSet, and print the new value
-  # so the Dim/Brighter buttons can report it to HA.
-  brightnessStep = pkgs.writeShellScript "ha-brightness-step" ''
-    set -u
-    step=10
-    cur=$(${brightnessGet})
-    case "''${1:-}" in
-      up)   new=$(( cur + step )) ;;
-      down) new=$(( cur - step )) ;;
-      *) echo "usage: $0 up|down" >&2; exit 2 ;;
-    esac
-    [ "$new" -gt 100 ] && new=100
-    [ "$new" -lt 0 ] && new=0
-    ${brightnessSet} "$new" >/dev/null 2>&1 || true
-    ${pkgs.coreutils}/bin/printf '%s\n' "$new"
-  '';
-
-  # Dim/Brighter button actions: step, then report the resulting level so HA's
-  # brightness slider tracks the buttons.
-  dimButton = pkgs.writeShellScript "ha-dim" ''
-    new=$(${brightnessStep} down)
-    ${reportDisplayState} bright "$new"
-  '';
-  brightButton = pkgs.writeShellScript "ha-bright" ''
-    new=$(${brightnessStep} up)
-    ${reportDisplayState} bright "$new"
   '';
 
   # On-screen keyboard toggle, driven by the ⌨ Keyboard button on the bar.
@@ -461,8 +415,9 @@ let
     ${vboard}/bin/vboard >/dev/null 2>&1 &
 
     # Wait for the window to map, then size and dock it. Poll briefly; give up
-    # quietly if it never appears so a stray tap can't wedge the bar.
-    bar=72
+    # quietly if it never appears so a stray tap can't wedge the bar. `bar` is the
+    # waybar height (keep in sync with waybarConfig), so the OSK sits just above it.
+    bar=50
     i=0
     while [ "$i" -lt 50 ]; do
       i=$((i + 1))
@@ -487,23 +442,20 @@ let
     done
   '';
 
-  # Bottom button bar. waybar is a wlr-layer-shell client on the "bottom" layer
-  # with an exclusive zone, so Sway reserves the strip and tiles Chromium into
-  # the space above it — no manual splitting. The OSK stays on the "top" layer,
-  # so it still overlays these buttons when it pops. Each button is a
-  # custom module whose on-click runs a command as the kiosk user:
-  #   Off      → DPMS the display off; the wake agent (above) powers it back on
-  #              at the next touch/input event.
-  #   Dim      → lower brightness 10% via the resolved backend (backlight / DDC /
-  #              software gamma — see brightnessStep above).
-  #   Brighter → raise brightness 10% the same way.
+  # Bottom bar. waybar is a wlr-layer-shell client on the "bottom" layer with an
+  # exclusive zone, so Sway reserves the strip and tiles Chromium into the space
+  # above it — no manual splitting. The OSK stays on the "top" layer, so it still
+  # overlays the bar when it pops. Power and brightness are controlled from Home
+  # Assistant (the MQTT Display light), so the bar only carries navigation and the
+  # keyboard toggle. Each button is a custom module whose on-click runs a command
+  # as the kiosk user.
   waybarConfig = pkgs.writeText "ha-kiosk-waybar.json" ''
     {
       "layer": "bottom",
       "position": "bottom",
-      "height": 72,
+      "height": 50,
       "modules-left": ["custom/home", "custom/setup"],
-      "modules-center": ["custom/off", "custom/dim", "custom/bright"],
+      "modules-center": [],
       "modules-right": ["custom/kbd"],
       "custom/kbd": {
         "format": "⌨  Keyboard",
@@ -519,21 +471,6 @@ let
         "format": "⚙  Config",
         "tooltip": false,
         "on-click": "${cdpNav} ${daemonBase}/setup"
-      },
-      "custom/off": {
-        "format": "⏻  Off",
-        "tooltip": false,
-        "on-click": "${pkgs.sway}/bin/swaymsg 'output * power off'; ${pkgs.coreutils}/bin/touch ${displayOffFlag}; ${reportDisplayState} off"
-      },
-      "custom/dim": {
-        "format": "🔅  Dim",
-        "tooltip": false,
-        "on-click": "${dimButton}"
-      },
-      "custom/bright": {
-        "format": "🔆  Brighter",
-        "tooltip": false,
-        "on-click": "${brightButton}"
       }
     }
   '';
@@ -550,20 +487,14 @@ let
     }
     #custom-home,
     #custom-setup,
-    #custom-off,
-    #custom-dim,
-    #custom-bright,
     #custom-kbd {
       padding: 0 16px;
-      margin: 6px;
+      margin: 5px;
       background: #1e2633;
       border-radius: 10px;
     }
     #custom-home:active,
     #custom-setup:active,
-    #custom-off:active,
-    #custom-dim:active,
-    #custom-bright:active,
     #custom-kbd:active {
       background: #33415a;
     }
