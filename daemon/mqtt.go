@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -115,21 +116,25 @@ type Bridge struct {
 	disp   *Display
 	client mqtt.Client
 
-	statusTopic    string // availability (LWT)
-	cmdTopic       string // HA -> us
-	stateTopic     string // us -> HA
-	discoveryTopic string // retained discovery config
+	statusTopic      string // availability (LWT)
+	cmdTopic         string // power HA -> us
+	stateTopic       string // power us -> HA
+	brightCmdTopic   string // brightness HA -> us
+	brightStateTopic string // brightness us -> HA
+	discoveryTopic   string // retained discovery config
 }
 
 func newBridge(cfg MQTTConfig, disp *Display) *Bridge {
 	base := "ha-dashboard/" + cfg.NodeID
 	return &Bridge{
-		cfg:            cfg,
-		disp:           disp,
-		statusTopic:    base + "/status",
-		cmdTopic:       base + "/display/set",
-		stateTopic:     base + "/display/state",
-		discoveryTopic: fmt.Sprintf("%s/light/%s/display/config", cfg.DiscoveryPrefix, cfg.NodeID),
+		cfg:              cfg,
+		disp:             disp,
+		statusTopic:      base + "/status",
+		cmdTopic:         base + "/display/set",
+		stateTopic:       base + "/display/state",
+		brightCmdTopic:   base + "/display/brightness/set",
+		brightStateTopic: base + "/display/brightness/state",
+		discoveryTopic:   fmt.Sprintf("%s/light/%s/display/config", cfg.DiscoveryPrefix, cfg.NodeID),
 	}
 }
 
@@ -194,7 +199,7 @@ func NewMQTTManager(disp *Display) *MQTTManager {
 	m := &MQTTManager{disp: disp}
 	// Republish whenever the display state changes (including reports from the
 	// reverse channel), through whichever bridge is currently live.
-	disp.SetObserver(func(bool) {
+	disp.SetObserver(func() {
 		m.mu.Lock()
 		b := m.cur
 		m.mu.Unlock()
@@ -227,19 +232,24 @@ func (m *MQTTManager) Apply(cfg MQTTConfig) {
 func (b *Bridge) onConnect(client mqtt.Client) {
 	log.Printf("mqtt: connected")
 
-	// HA discovery: describe the display as an on/off light. Retained so HA
-	// rediscovers it after its own restart.
+	// HA discovery: describe the display as a dimmable light — on/off drives DPMS
+	// power, brightness (0..100) drives the backlight. Retained so HA rediscovers
+	// it after its own restart.
 	cfg := map[string]any{
-		"name":                  "Display",
-		"unique_id":             b.cfg.NodeID + "_display",
-		"command_topic":         b.cmdTopic,
-		"state_topic":           b.stateTopic,
-		"payload_on":            "ON",
-		"payload_off":           "OFF",
-		"availability_topic":    b.statusTopic,
-		"payload_available":     "online",
-		"payload_not_available": "offline",
-		"icon":                  "mdi:monitor",
+		"name":                     "Display",
+		"unique_id":                b.cfg.NodeID + "_display",
+		"command_topic":            b.cmdTopic,
+		"state_topic":              b.stateTopic,
+		"payload_on":               "ON",
+		"payload_off":              "OFF",
+		"brightness":               true,
+		"brightness_command_topic": b.brightCmdTopic,
+		"brightness_state_topic":   b.brightStateTopic,
+		"brightness_scale":         100,
+		"availability_topic":       b.statusTopic,
+		"payload_available":        "online",
+		"payload_not_available":    "offline",
+		"icon":                     "mdi:monitor",
 		"device": map[string]any{
 			"identifiers":  []string{b.cfg.NodeID},
 			"name":         "HA Dashboard " + b.cfg.NodeID,
@@ -253,9 +263,13 @@ func (b *Bridge) onConnect(client mqtt.Client) {
 	// Announce availability and current state, then listen for commands.
 	b.publish(client, b.statusTopic, []byte("online"), true)
 	b.publishState(client)
+	b.publishBrightness(client)
 
 	if tok := client.Subscribe(b.cmdTopic, 1, b.onCommand); tok.Wait() && tok.Error() != nil {
 		log.Printf("mqtt: subscribe %s: %v", b.cmdTopic, tok.Error())
+	}
+	if tok := client.Subscribe(b.brightCmdTopic, 1, b.onBrightness); tok.Wait() && tok.Error() != nil {
+		log.Printf("mqtt: subscribe %s: %v", b.brightCmdTopic, tok.Error())
 	}
 }
 
@@ -270,6 +284,28 @@ func (b *Bridge) onCommand(client mqtt.Client, msg mqtt.Message) {
 	// On success Set fires the observer, which publishes the new state.
 }
 
+func (b *Bridge) onBrightness(client mqtt.Client, msg mqtt.Message) {
+	pct, err := strconv.Atoi(strings.TrimSpace(string(msg.Payload())))
+	if err != nil {
+		log.Printf("mqtt: bad brightness %q: %v", msg.Payload(), err)
+		return
+	}
+	// A brightness change implies the light is on, so power the display up first
+	// (HA sends brightness when you drag the slider from off).
+	if !b.disp.On() {
+		if err := b.disp.Set(true); err != nil {
+			log.Printf("mqtt: display power-on for brightness: %v", err)
+		}
+	}
+	if err := b.disp.SetBrightness(pct); err != nil {
+		log.Printf("mqtt: display brightness=%d: %v", pct, err)
+		// Republish actual value so HA's optimistic slider doesn't drift.
+		b.publishBrightness(client)
+		return
+	}
+	// On success SetBrightness fires the observer, which publishes the new value.
+}
+
 // publishStateNow publishes the current display state through this bridge, if it
 // is connected. Used by the state observer so both MQTT commands and reverse-
 // channel reports converge HA to reality.
@@ -278,6 +314,7 @@ func (b *Bridge) publishStateNow() {
 		return
 	}
 	b.publishState(b.client)
+	b.publishBrightness(b.client)
 }
 
 func (b *Bridge) publishState(client mqtt.Client) {
@@ -286,6 +323,10 @@ func (b *Bridge) publishState(client mqtt.Client) {
 		state = "ON"
 	}
 	b.publish(client, b.stateTopic, []byte(state), true)
+}
+
+func (b *Bridge) publishBrightness(client mqtt.Client) {
+	b.publish(client, b.brightStateTopic, []byte(strconv.Itoa(b.disp.Brightness())), true)
 }
 
 func (b *Bridge) publish(client mqtt.Client, topic string, payload []byte, retain bool) {

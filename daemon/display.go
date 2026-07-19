@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"sync"
 	"syscall"
 )
@@ -14,30 +15,46 @@ import (
 // *inside* the Sway session reads it and runs `swaymsg output * power on/off`.
 // See kiosk.nix for that agent.
 type Display struct {
-	mu       sync.Mutex
-	on       bool
-	fifo     string
-	observer func(on bool) // notified after any state change, to republish over MQTT
+	mu         sync.Mutex
+	on         bool
+	brightness int // 0..100, the panel backlight/gamma level
+	fifo       string
+	observer   func() // notified after any state change, to republish over MQTT
 }
 
-// NewDisplay assumes the panel is on at boot (Sway powers outputs on by default);
-// the in-session agent reports the real state shortly after, correcting the guess.
+// NewDisplay assumes the panel is on and at full brightness at boot; the
+// in-session agent reports the real state shortly after, correcting the guess.
 // The FIFO path can be overridden for testing off-device.
 func NewDisplay() *Display {
 	fifo := displayFifo
 	if v := os.Getenv("DASHBOARD_DISPLAY_FIFO"); v != "" {
 		fifo = v
 	}
-	return &Display{on: true, fifo: fifo}
+	return &Display{on: true, brightness: 100, fifo: fifo}
 }
 
-// SetObserver registers a callback fired (outside the lock) whenever the tracked
+// SetObserver registers a callback fired (outside the lock) whenever any tracked
 // state changes, so the MQTT bridge can republish it. Used to keep HA in sync
-// with out-of-band power changes reported over the reverse channel.
-func (d *Display) SetObserver(f func(on bool)) {
+// with out-of-band changes reported over the reverse channel.
+func (d *Display) SetObserver(f func()) {
 	d.mu.Lock()
 	d.observer = f
 	d.mu.Unlock()
+}
+
+// writeCmd sends one command line to the in-session agent over the FIFO.
+// O_NONBLOCK so opening a reader-less FIFO fails with ENXIO instead of blocking.
+func (d *Display) writeCmd(line string) error {
+	f, err := os.OpenFile(d.fifo, os.O_WRONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return fmt.Errorf("display session not ready: %w", err)
+	}
+	_, werr := f.WriteString(line + "\n")
+	f.Close()
+	if werr != nil {
+		return fmt.Errorf("write display fifo: %w", werr)
+	}
+	return nil
 }
 
 // Report records the *actual* display power state observed in-session (from the
@@ -50,31 +67,70 @@ func (d *Display) Report(on bool) {
 	obs := d.observer
 	d.mu.Unlock()
 	if obs != nil {
-		obs(on)
+		obs()
 	}
+}
+
+// SetBrightness requests an absolute backlight level (0..100) via the FIFO, the
+// brightness analogue of Set. The in-session agent applies it with whichever
+// backend it resolved (backlight / DDC / software gamma).
+func (d *Display) SetBrightness(pct int) error {
+	pct = clampPct(pct)
+	d.mu.Lock()
+	if err := d.writeCmd("bright " + strconv.Itoa(pct)); err != nil {
+		d.mu.Unlock()
+		return err
+	}
+	d.brightness = pct
+	obs := d.observer
+	d.mu.Unlock()
+	if obs != nil {
+		obs()
+	}
+	return nil
+}
+
+// ReportBrightness records the actual level reported in-session (Dim/Brighter
+// buttons or a startup resync), the brightness analogue of Report.
+func (d *Display) ReportBrightness(pct int) {
+	d.mu.Lock()
+	d.brightness = clampPct(pct)
+	obs := d.observer
+	d.mu.Unlock()
+	if obs != nil {
+		obs()
+	}
+}
+
+// Brightness reports the last known backlight level (0..100).
+func (d *Display) Brightness() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.brightness
+}
+
+func clampPct(p int) int {
+	if p < 0 {
+		return 0
+	}
+	if p > 100 {
+		return 100
+	}
+	return p
 }
 
 // Set requests the display power state. Writing is non-blocking: if the kiosk
 // session isn't up yet there's no reader on the FIFO, and we report that rather
 // than hang the caller (an MQTT command handler).
 func (d *Display) Set(on bool) error {
-	d.mu.Lock()
-
-	// O_NONBLOCK so opening a reader-less FIFO fails with ENXIO instead of blocking.
-	f, err := os.OpenFile(d.fifo, os.O_WRONLY|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		d.mu.Unlock()
-		return fmt.Errorf("display session not ready: %w", err)
-	}
-	cmd := "off\n"
+	cmd := "off"
 	if on {
-		cmd = "on\n"
+		cmd = "on"
 	}
-	_, werr := f.WriteString(cmd)
-	f.Close()
-	if werr != nil {
+	d.mu.Lock()
+	if err := d.writeCmd(cmd); err != nil {
 		d.mu.Unlock()
-		return fmt.Errorf("write display fifo: %w", werr)
+		return err
 	}
 	d.on = on
 	obs := d.observer
@@ -83,7 +139,7 @@ func (d *Display) Set(on bool) error {
 	// Notify outside the lock: the observer may publish over MQTT (a blocking
 	// broker round-trip) and we must not hold the lock across it.
 	if obs != nil {
-		obs(on)
+		obs()
 	}
 	return nil
 }

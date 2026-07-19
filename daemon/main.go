@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -337,11 +338,16 @@ func watchDisplayState(disp *Display) {
 		}
 		sc := bufio.NewScanner(f)
 		for sc.Scan() {
-			switch strings.TrimSpace(sc.Text()) {
-			case "on":
+			line := strings.TrimSpace(sc.Text())
+			switch {
+			case line == "on":
 				disp.Report(true)
-			case "off":
+			case line == "off":
 				disp.Report(false)
+			case strings.HasPrefix(line, "bright "):
+				if n, err := strconv.Atoi(strings.TrimSpace(line[len("bright "):])); err == nil {
+					disp.ReportBrightness(n)
+				}
 			}
 		}
 		if err := sc.Err(); err != nil {

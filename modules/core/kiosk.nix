@@ -33,7 +33,7 @@ let
   # so reporting never wedges the caller. Read by watchDisplayState in the daemon.
   displayStateFifo = "/var/lib/dashboard/display-state.fifo";
   reportDisplayState = pkgs.writeShellScript "ha-report-display-state" ''
-    ${pkgs.coreutils}/bin/printf '%s\n' "$1" \
+    ${pkgs.coreutils}/bin/printf '%s\n' "$*" \
       | ${pkgs.coreutils}/bin/timeout 1 ${pkgs.coreutils}/bin/tee ${displayStateFifo} >/dev/null 2>&1 || true
   '';
   # Chromium's CDP endpoint; the port binds to loopback (127.0.0.1) by default.
@@ -117,23 +117,30 @@ let
       | ${lib.getExe pkgs.jq} -r 'if any(.[]; .power) then "on" else "off" end' 2>/dev/null)
     [ -n "$init" ] && ${reportDisplayState} "$init"
 
-    fifo=/var/lib/dashboard/display.fifo
-    while true; do
-      while IFS= read -r cmd; do
-        # Apply, then report the actual state back so HA reflects it — this also
-        # covers commands that originate outside MQTT. Arm/disarm the wake-on-
-        # touch flag here too (not just on the Off button), so an MQTT/HA power-
-        # off also lets the next touch re-power the display.
-        case "$cmd" in
-          on)  ${pkgs.sway}/bin/swaymsg 'output * power on'  >/dev/null 2>&1 || true
-               ${pkgs.coreutils}/bin/rm -f ${displayOffFlag} 2>/dev/null || true
-               ${reportDisplayState} on  ;;
-          off) ${pkgs.sway}/bin/swaymsg 'output * power off' >/dev/null 2>&1 || true
-               ${pkgs.coreutils}/bin/touch ${displayOffFlag} 2>/dev/null || true
-               ${reportDisplayState} off ;;
-        esac
-      done < "$fifo"
-      ${pkgs.coreutils}/bin/sleep 1
+    # Hold the FIFO open read-write for the whole session (fd 3). O_RDWR never
+    # blocks on open and never sees EOF when a writer disconnects, so a reader is
+    # always present and the daemon's non-blocking writes never race against a
+    # reopen (which previously caused ENXIO and dropped commands). Same trick the
+    # daemon uses for the reverse FIFO.
+    exec 3<> /var/lib/dashboard/display.fifo
+    # IFS=' ' (not empty) so the line splits into verb + argument — "bright 40"
+    # becomes cmd=bright arg=40; "on"/"off" leave arg empty.
+    while IFS=' ' read -r cmd arg <&3; do
+      # Apply, then report the actual state back so HA reflects it — this also
+      # covers commands that originate outside MQTT. Arm/disarm the wake-on-touch
+      # flag here too (not just on the Off button), so an MQTT/HA power-off also
+      # lets the next touch re-power the display.
+      case "$cmd" in
+        on)  ${pkgs.sway}/bin/swaymsg 'output * power on'  >/dev/null 2>&1 || true
+             ${pkgs.coreutils}/bin/rm -f ${displayOffFlag} 2>/dev/null || true
+             ${reportDisplayState} on  ;;
+        off) ${pkgs.sway}/bin/swaymsg 'output * power off' >/dev/null 2>&1 || true
+             ${pkgs.coreutils}/bin/touch ${displayOffFlag} 2>/dev/null || true
+             ${reportDisplayState} off ;;
+        # Absolute backlight level (0..100) from the HA brightness slider.
+        bright) ${brightnessSet} "$arg" >/dev/null 2>&1 || true
+                ${reportDisplayState} bright "$arg" ;;
+      esac
     done
   '';
 
@@ -295,6 +302,11 @@ let
   # dashboard.kiosk.brightness.method forces a tier; "auto" (default) detects.
   brightnessMethod = config.dashboard.kiosk.brightness.method;
   brightnessEnv = "/var/lib/dashboard/brightness.env";
+  # Last applied level (0..100), the single source of truth for readback. The
+  # backends differ in how (or whether) they report the current value, so we
+  # track it here instead: brightnessSet writes it, brightnessGet reads it, and
+  # it feeds both the Dim/Brighter steps and the brightness reported to HA.
+  brightnessValueFile = "/var/lib/dashboard/brightness.value";
 
   brightnessResolve = pkgs.writeShellScript "ha-brightness-resolve" ''
     set -u
@@ -332,12 +344,41 @@ let
     fi
 
     ${pkgs.coreutils}/bin/printf 'METHOD=%s\nDEVICE=%s\n' "$m" "$dev" > ${brightnessEnv}
+
+    # Seed the tracked level from the hardware where it can be read (backlight,
+    # DDC); software has no readback so assume full. Then report it so HA starts
+    # in sync after a session restart.
+    init=100
+    case "$m" in
+      backlight)
+        p=$(${pkgs.brightnessctl}/bin/brightnessctl -m -d "$dev" 2>/dev/null \
+          | ${pkgs.coreutils}/bin/cut -d, -f4 | ${pkgs.coreutils}/bin/tr -d '%')
+        [ -n "$p" ] && init=$p ;;
+      ddc)
+        # getvcp 10 -t prints: "VCP 10 C <cur> <max>"
+        set -- $(${pkgs.ddcutil}/bin/ddcutil getvcp 10 -t 2>/dev/null)
+        if [ "''${4:-}" != "" ] && [ "''${5:-0}" -gt 0 ] 2>/dev/null; then
+          init=$(( $4 * 100 / $5 ))
+        fi ;;
+    esac
+    ${pkgs.coreutils}/bin/printf '%s\n' "$init" > ${brightnessValueFile}
+    ${reportDisplayState} bright "$init"
   '';
 
-  # Step the brightness up/down using whichever tier the resolver picked. Called
-  # by the Dim/Brighter buttons. A missing env file defaults to software so a
-  # first click before the resolver finishes is harmless rather than an error.
-  brightnessStep = pkgs.writeShellScript "ha-brightness-step" ''
+  # Read the tracked level (0..100). Missing file ⇒ assume full, so a query
+  # before the resolver finishes is harmless.
+  brightnessGet = pkgs.writeShellScript "ha-brightness-get" ''
+    if [ -r ${brightnessValueFile} ]; then
+      ${pkgs.coreutils}/bin/cat ${brightnessValueFile}
+    else
+      echo 100
+    fi
+  '';
+
+  # Set an absolute level (0..100) via whichever tier the resolver picked, and
+  # record it. A missing env file defaults to software so a set before the
+  # resolver finishes still does something sane rather than erroring.
+  brightnessSet = pkgs.writeShellScript "ha-brightness-set" ''
     set -u
     METHOD=software
     DEVICE=""
@@ -345,35 +386,56 @@ let
       # shellcheck disable=SC1091
       . ${brightnessEnv}
     fi
-    step=10
-    case "''${1:-}" in
-      up) dir=up ;;
-      down) dir=down ;;
-      *) echo "usage: $0 up|down" >&2; exit 2 ;;
-    esac
+    pct=''${1:-}
+    case "$pct" in ""|*[!0-9]*) echo "usage: $0 <0-100>" >&2; exit 2 ;; esac
+    [ "$pct" -gt 100 ] && pct=100
 
     case "$METHOD" in
       backlight)
-        if [ "$dir" = up ]; then
-          ${pkgs.brightnessctl}/bin/brightnessctl -d "$DEVICE" set "''${step}%+"
-        else
-          ${pkgs.brightnessctl}/bin/brightnessctl -d "$DEVICE" set "''${step}%-"
-        fi
-        ;;
+        ${pkgs.brightnessctl}/bin/brightnessctl -d "$DEVICE" set "''${pct}%" >/dev/null 2>&1 || true ;;
       ddc)
-        if [ "$dir" = up ]; then
-          ${pkgs.ddcutil}/bin/ddcutil setvcp 10 + "$step"
-        else
-          ${pkgs.ddcutil}/bin/ddcutil setvcp 10 - "$step"
-        fi
-        ;;
+        ${pkgs.ddcutil}/bin/ddcutil setvcp 10 "$pct" >/dev/null 2>&1 || true ;;
       software)
-        delta=0.1
-        [ "$dir" = down ] && delta=-0.1
+        # wl-gammarelay Brightness is 0..1; floor at 0.10 so a touch-only kiosk
+        # never dims to an unrecoverable black.
+        if [ "$pct" -lt 10 ]; then
+          val="0.10"
+        else
+          val=$(${pkgs.coreutils}/bin/printf '%d.%02d' $((pct / 100)) $((pct % 100)))
+        fi
         ${pkgs.systemd}/bin/busctl --user -- \
-          call rs.wl-gammarelay / rs.wl.gammarelay UpdateBrightness d "$delta"
-        ;;
+          set-property rs.wl-gammarelay / rs.wl.gammarelay Brightness d "$val" >/dev/null 2>&1 || true ;;
     esac
+
+    ${pkgs.coreutils}/bin/printf '%s\n' "$pct" > ${brightnessValueFile}
+  '';
+
+  # Step ±10% off the tracked level using brightnessSet, and print the new value
+  # so the Dim/Brighter buttons can report it to HA.
+  brightnessStep = pkgs.writeShellScript "ha-brightness-step" ''
+    set -u
+    step=10
+    cur=$(${brightnessGet})
+    case "''${1:-}" in
+      up)   new=$(( cur + step )) ;;
+      down) new=$(( cur - step )) ;;
+      *) echo "usage: $0 up|down" >&2; exit 2 ;;
+    esac
+    [ "$new" -gt 100 ] && new=100
+    [ "$new" -lt 0 ] && new=0
+    ${brightnessSet} "$new" >/dev/null 2>&1 || true
+    ${pkgs.coreutils}/bin/printf '%s\n' "$new"
+  '';
+
+  # Dim/Brighter button actions: step, then report the resulting level so HA's
+  # brightness slider tracks the buttons.
+  dimButton = pkgs.writeShellScript "ha-dim" ''
+    new=$(${brightnessStep} down)
+    ${reportDisplayState} bright "$new"
+  '';
+  brightButton = pkgs.writeShellScript "ha-bright" ''
+    new=$(${brightnessStep} up)
+    ${reportDisplayState} bright "$new"
   '';
 
   # On-screen keyboard toggle, driven by the ⌨ Keyboard button on the bar.
@@ -466,12 +528,12 @@ let
       "custom/dim": {
         "format": "🔅  Dim",
         "tooltip": false,
-        "on-click": "${brightnessStep} down"
+        "on-click": "${dimButton}"
       },
       "custom/bright": {
         "format": "🔆  Brighter",
         "tooltip": false,
-        "on-click": "${brightnessStep} up"
+        "on-click": "${brightButton}"
       }
     }
   '';
