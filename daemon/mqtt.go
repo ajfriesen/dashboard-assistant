@@ -114,6 +114,7 @@ func defaultNodeID() string {
 type Bridge struct {
 	cfg    MQTTConfig
 	disp   *Display
+	pages  *Pages
 	client mqtt.Client
 
 	statusTopic      string // availability (LWT)
@@ -121,20 +122,41 @@ type Bridge struct {
 	stateTopic       string // power us -> HA
 	brightCmdTopic   string // brightness HA -> us
 	brightStateTopic string // brightness us -> HA
-	discoveryTopic   string // retained discovery config
+	discoveryTopic   string // retained display discovery config
+
+	// Page list: a select to jump to a page + Next/Prev buttons to cycle.
+	pageSelectCmdTopic   string
+	pageSelectStateTopic string
+	pageNextCmdTopic     string
+	pagePrevCmdTopic     string
+	pageSelectDiscovery  string
+	pageNextDiscovery    string
+	pagePrevDiscovery    string
 }
 
-func newBridge(cfg MQTTConfig, disp *Display) *Bridge {
+func newBridge(cfg MQTTConfig, disp *Display, pages *Pages) *Bridge {
 	base := "ha-dashboard/" + cfg.NodeID
+	disco := func(kind, obj string) string {
+		return fmt.Sprintf("%s/%s/%s/%s/config", cfg.DiscoveryPrefix, kind, cfg.NodeID, obj)
+	}
 	return &Bridge{
 		cfg:              cfg,
 		disp:             disp,
+		pages:            pages,
 		statusTopic:      base + "/status",
 		cmdTopic:         base + "/display/set",
 		stateTopic:       base + "/display/state",
 		brightCmdTopic:   base + "/display/brightness/set",
 		brightStateTopic: base + "/display/brightness/state",
-		discoveryTopic:   fmt.Sprintf("%s/light/%s/display/config", cfg.DiscoveryPrefix, cfg.NodeID),
+		discoveryTopic:   disco("light", "display"),
+
+		pageSelectCmdTopic:   base + "/page/set",
+		pageSelectStateTopic: base + "/page/state",
+		pageNextCmdTopic:     base + "/page/next/set",
+		pagePrevCmdTopic:     base + "/page/prev/set",
+		pageSelectDiscovery:  disco("select", "page"),
+		pageNextDiscovery:    disco("button", "page_next"),
+		pagePrevDiscovery:    disco("button", "page_prev"),
 	}
 }
 
@@ -190,24 +212,52 @@ func (b *Bridge) stop() {
 // it tears down any current bridge and starts a fresh one, or leaves MQTT
 // disabled when no broker is configured.
 type MQTTManager struct {
-	mu   sync.Mutex
-	disp *Display
-	cur  *Bridge
+	mu    sync.Mutex
+	disp  *Display
+	pages *Pages
+	cur   *Bridge
 }
 
-func NewMQTTManager(disp *Display) *MQTTManager {
-	m := &MQTTManager{disp: disp}
-	// Republish whenever the display state changes (including reports from the
-	// reverse channel), through whichever bridge is currently live.
+func NewMQTTManager(disp *Display, pages *Pages) *MQTTManager {
+	m := &MQTTManager{disp: disp, pages: pages}
+	// Republish whenever the display state changes (including reverse-channel
+	// reports), through whichever bridge is currently live.
 	disp.SetObserver(func() {
-		m.mu.Lock()
-		b := m.cur
-		m.mu.Unlock()
-		if b != nil {
-			b.publishStateNow()
-		}
+		m.withBridge((*Bridge).publishStateNow)
+	})
+	// Republish the current page whenever it changes.
+	pages.SetObserver(func() {
+		m.withBridge(func(b *Bridge) { b.ifConnected(b.publishPageState) })
 	})
 	return m
+}
+
+func (m *MQTTManager) withBridge(f func(*Bridge)) {
+	m.mu.Lock()
+	b := m.cur
+	m.mu.Unlock()
+	if b != nil {
+		f(b)
+	}
+}
+
+// ifConnected runs a publish only while the link is up (retained-topic publishes
+// to a down broker just error-log noise).
+func (b *Bridge) ifConnected(f func(mqtt.Client)) {
+	if b.client != nil && b.client.IsConnectionOpen() {
+		f(b.client)
+	}
+}
+
+// RepublishPageDiscovery re-announces the page select/buttons — call it after the
+// page list changes so HA picks up the new options.
+func (m *MQTTManager) RepublishPageDiscovery() {
+	m.withBridge(func(b *Bridge) {
+		b.ifConnected(func(c mqtt.Client) {
+			b.publishPageDiscovery(c)
+			b.publishPageState(c)
+		})
+	})
 }
 
 // Apply (re)starts the bridge with cfg, replacing any running one. An empty
@@ -224,7 +274,7 @@ func (m *MQTTManager) Apply(cfg MQTTConfig) {
 		log.Printf("mqtt: disabled (no broker configured)")
 		return
 	}
-	b := newBridge(cfg, m.disp)
+	b := newBridge(cfg, m.disp, m.pages)
 	b.start()
 	m.cur = b
 }
@@ -250,28 +300,96 @@ func (b *Bridge) onConnect(client mqtt.Client) {
 		"payload_available":        "online",
 		"payload_not_available":    "offline",
 		"icon":                     "mdi:monitor",
-		"device": map[string]any{
-			"identifiers":  []string{b.cfg.NodeID},
-			"name":         "HA Dashboard " + b.cfg.NodeID,
-			"manufacturer": "ha-dashboard-os",
-			"model":        "kiosk",
-		},
+		"device":                   b.device(),
 	}
 	payload, _ := json.Marshal(cfg)
 	b.publish(client, b.discoveryTopic, payload, true)
+
+	// Page select + Next/Prev buttons (their own entities, same device).
+	b.publishPageDiscovery(client)
 
 	// Announce availability and current state, then listen for commands.
 	b.publish(client, b.statusTopic, []byte("online"), true)
 	b.publishState(client)
 	b.publishBrightness(client)
+	b.publishPageState(client)
 
-	if tok := client.Subscribe(b.cmdTopic, 1, b.onCommand); tok.Wait() && tok.Error() != nil {
-		log.Printf("mqtt: subscribe %s: %v", b.cmdTopic, tok.Error())
+	subs := []struct {
+		topic string
+		h     mqtt.MessageHandler
+	}{
+		{b.cmdTopic, b.onCommand},
+		{b.brightCmdTopic, b.onBrightness},
+		{b.pageSelectCmdTopic, b.onSelectPage},
+		{b.pageNextCmdTopic, b.onNextPage},
+		{b.pagePrevCmdTopic, b.onPrevPage},
 	}
-	if tok := client.Subscribe(b.brightCmdTopic, 1, b.onBrightness); tok.Wait() && tok.Error() != nil {
-		log.Printf("mqtt: subscribe %s: %v", b.brightCmdTopic, tok.Error())
+	for _, s := range subs {
+		if tok := client.Subscribe(s.topic, 1, s.h); tok.Wait() && tok.Error() != nil {
+			log.Printf("mqtt: subscribe %s: %v", s.topic, tok.Error())
+		}
 	}
 }
+
+// device is the shared HA device all entities attach to, so the light, page
+// select and buttons group under one "HA Dashboard <node>" device.
+func (b *Bridge) device() map[string]any {
+	return map[string]any{
+		"identifiers":  []string{b.cfg.NodeID},
+		"name":         "HA Dashboard " + b.cfg.NodeID,
+		"manufacturer": "ha-dashboard-os",
+		"model":        "kiosk",
+	}
+}
+
+// publishPageDiscovery (re)announces the page select and Next/Prev buttons. With
+// no pages configured it clears them (empty retained payload) so HA drops the
+// entities; HA also requires a select to have at least one option.
+func (b *Bridge) publishPageDiscovery(client mqtt.Client) {
+	labels := b.pages.Labels()
+	if len(labels) == 0 {
+		b.publish(client, b.pageSelectDiscovery, nil, true)
+		b.publish(client, b.pageNextDiscovery, nil, true)
+		b.publish(client, b.pagePrevDiscovery, nil, true)
+		return
+	}
+	sel, _ := json.Marshal(map[string]any{
+		"name":               "Page",
+		"unique_id":          b.cfg.NodeID + "_page",
+		"command_topic":      b.pageSelectCmdTopic,
+		"state_topic":        b.pageSelectStateTopic,
+		"options":            labels,
+		"availability_topic": b.statusTopic,
+		"icon":               "mdi:web",
+		"device":             b.device(),
+	})
+	b.publish(client, b.pageSelectDiscovery, sel, true)
+
+	button := func(obj, name, icon, cmd string) []byte {
+		p, _ := json.Marshal(map[string]any{
+			"name":               name,
+			"unique_id":          b.cfg.NodeID + "_" + obj,
+			"command_topic":      cmd,
+			"availability_topic": b.statusTopic,
+			"icon":               icon,
+			"device":             b.device(),
+		})
+		return p
+	}
+	b.publish(client, b.pageNextDiscovery, button("page_next", "Next page", "mdi:arrow-right-bold", b.pageNextCmdTopic), true)
+	b.publish(client, b.pagePrevDiscovery, button("page_prev", "Previous page", "mdi:arrow-left-bold", b.pagePrevCmdTopic), true)
+}
+
+func (b *Bridge) publishPageState(client mqtt.Client) {
+	b.publish(client, b.pageSelectStateTopic, []byte(b.pages.CurrentLabel()), true)
+}
+
+func (b *Bridge) onSelectPage(_ mqtt.Client, msg mqtt.Message) {
+	b.pages.Select(strings.TrimSpace(string(msg.Payload())))
+}
+
+func (b *Bridge) onNextPage(_ mqtt.Client, _ mqtt.Message) { b.pages.Next() }
+func (b *Bridge) onPrevPage(_ mqtt.Client, _ mqtt.Message) { b.pages.Prev() }
 
 func (b *Bridge) onCommand(client mqtt.Client, msg mqtt.Message) {
 	on := strings.EqualFold(strings.TrimSpace(string(msg.Payload())), "ON")

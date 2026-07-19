@@ -32,8 +32,9 @@ const (
 )
 
 type server struct {
-	nm   *NetworkManager // nil if no Wi-Fi device / D-Bus unavailable
-	mqtt *MQTTManager    // owns the runtime-reconfigurable MQTT bridge
+	nm    *NetworkManager // nil if no Wi-Fi device / D-Bus unavailable
+	mqtt  *MQTTManager    // owns the runtime-reconfigurable MQTT bridge
+	pages *Pages          // the pushable page list + current index
 }
 
 // deriveState implements the first-boot decision flow.
@@ -66,7 +67,8 @@ func main() {
 		log.Printf("warning: NetworkManager unavailable: %v", err)
 	}
 	disp := NewDisplay()
-	srv := &server{nm: nm, mqtt: NewMQTTManager(disp)}
+	pages := NewPages()
+	srv := &server{nm: nm, mqtt: NewMQTTManager(disp, pages), pages: pages}
 
 	// MQTT bridge to Home Assistant (opt-in: disabled unless a broker is set).
 	// Settings come from the environment overlaid by the runtime state file the
@@ -98,6 +100,9 @@ func main() {
 	// MQTT settings surface for the setup UI: GET the current config, POST to
 	// change it. Loopback only — it carries the broker password.
 	mux.Handle("/api/mqtt", loopbackOnly(http.HandlerFunc(srv.handleMQTT)))
+	// Pushable page list (setup UI) and navigation (waybar Prev/Next buttons).
+	mux.Handle("/api/urls", loopbackOnly(http.HandlerFunc(srv.handleURLs)))
+	mux.Handle("/api/nav", loopbackOnly(http.HandlerFunc(srv.handleNav)))
 
 	mux.HandleFunc("/", srv.handleRoot)
 
@@ -304,6 +309,70 @@ func (s *server) handleMQTT(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "GET or POST only"})
 	}
+}
+
+// handleURLs gets or replaces the pushable page list. GET returns the pages;
+// POST replaces them (and re-announces the HA select/buttons).
+func (s *server) handleURLs(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, map[string]any{"pages": s.pages.List()})
+
+	case http.MethodPost:
+		var in struct {
+			Pages []Page `json:"pages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad json"})
+			return
+		}
+		pages := make([]Page, 0, len(in.Pages))
+		for _, p := range in.Pages {
+			p.Name = strings.TrimSpace(p.Name)
+			p.URL = strings.TrimSpace(p.URL)
+			if p.URL != "" {
+				pages = append(pages, p)
+			}
+		}
+		if err := s.pages.SetList(pages); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		s.mqtt.RepublishPageDiscovery()
+		writeJSON(w, http.StatusOK, map[string]string{"state": "saved"})
+
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "GET or POST only"})
+	}
+}
+
+// handleNav cycles or jumps the displayed page. Body: {"dir":"next"|"prev"} for
+// the waybar buttons, or {"page":"<label>"} to jump. POST only.
+func (s *server) handleNav(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST only"})
+		return
+	}
+	var req struct {
+		Dir  string `json:"dir"`
+		Page string `json:"page"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad json"})
+		return
+	}
+	switch {
+	case req.Page != "":
+		s.pages.Select(req.Page)
+	case req.Dir == "next":
+		s.pages.Next()
+	case req.Dir == "prev":
+		s.pages.Prev()
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "dir must be next/prev, or give a page"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"page": s.pages.CurrentLabel()})
 }
 
 func (s *server) handleReset(w http.ResponseWriter, r *http.Request) {

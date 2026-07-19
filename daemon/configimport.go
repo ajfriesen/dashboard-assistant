@@ -22,6 +22,10 @@ type importConfig struct {
 		NodeID          string `yaml:"node_id"`
 		DiscoveryPrefix string `yaml:"discovery_prefix"`
 	} `yaml:"mqtt"`
+	Pages []struct {
+		Name string `yaml:"name"`
+		URL  string `yaml:"url"`
+	} `yaml:"pages"`
 }
 
 // applyImport parses a YAML bundle and applies whatever it carries: Wi-Fi first
@@ -79,6 +83,24 @@ func (s *server) applyImport(data []byte) ([]string, error) {
 			s.mqtt.Apply(mc.withDefaults())
 		}
 		applied = append(applied, "mqtt")
+	}
+
+	if cfg.Pages != nil {
+		pages := make([]Page, 0, len(cfg.Pages))
+		for _, p := range cfg.Pages {
+			if p.URL != "" {
+				pages = append(pages, Page{Name: p.Name, URL: p.URL})
+			}
+		}
+		if s.pages != nil {
+			if err := s.pages.SetList(pages); err != nil {
+				return applied, fmt.Errorf("set pages: %w", err)
+			}
+			if s.mqtt != nil {
+				s.mqtt.RepublishPageDiscovery()
+			}
+		}
+		applied = append(applied, fmt.Sprintf("pages:%d", len(pages)))
 	}
 
 	return applied, nil

@@ -23,7 +23,9 @@ var (
 	// Reverse channel: in-session agents write the *actual* power state here and
 	// the daemon publishes it, so HA stays in sync with out-of-band changes.
 	displayStateFifo = stateDir + "/display-state.fifo"
-	mqttFile         = stateDir + "/mqtt.env" // runtime MQTT settings, written by the web UI / config import
+	mqttFile         = stateDir + "/mqtt.env"  // runtime MQTT settings, written by the web UI / config import
+	urlsFile         = stateDir + "/urls.json" // pushable page list (name+url), web UI / config import
+	navFifo          = stateDir + "/nav.fifo"  // daemon writes a URL; in-session agent navigates Chromium there
 )
 
 const sessionUnit = "greetd.service" // the Sway kiosk session; restart relaunches it

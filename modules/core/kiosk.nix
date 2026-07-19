@@ -288,6 +288,33 @@ let
     exec ${cdpNav} "$HA_URL"
   '';
 
+  # Navigation agent: the daemon writes a target URL to the nav FIFO — on an MQTT
+  # page select / Next / Prev, or the waybar Prev/Next buttons (which POST to the
+  # daemon) — and this in-session loop navigates the browser there via cdpNav.
+  # Held open read-write (fd 3) for the whole session and de-orphaned on start,
+  # exactly like the display agent, so the daemon's writes never race a reopen.
+  navAgent = pkgs.writeShellScript "ha-nav-agent" ''
+    for pid in $(${pkgs.procps}/bin/pgrep -f ha-nav-agent); do
+      [ "$pid" = "$$" ] || kill "$pid" 2>/dev/null || true
+    done
+    exec 3<> /var/lib/dashboard/nav.fifo
+    while IFS= read -r url <&3; do
+      [ -n "$url" ] && ${cdpNav} "$url" >/dev/null 2>&1 || true
+    done
+  '';
+
+  # Waybar Prev/Next: cycle the pushable page list. They POST to the daemon — the
+  # single owner of the list and current index — which navigates the browser and
+  # republishes the current page to HA, so the bar and the HA select stay in sync.
+  pagePrev = pkgs.writeShellScript "ha-page-prev" ''
+    ${lib.getExe pkgs.curl} -s --max-time 3 -X POST ${daemonBase}/api/nav \
+      -H 'Content-Type: application/json' -d '{"dir":"prev"}' >/dev/null 2>&1 || true
+  '';
+  pageNext = pkgs.writeShellScript "ha-page-next" ''
+    ${lib.getExe pkgs.curl} -s --max-time 3 -X POST ${daemonBase}/api/nav \
+      -H 'Content-Type: application/json' -d '{"dir":"next"}' >/dev/null 2>&1 || true
+  '';
+
   # Brightness backend, resolved once per session. There is no single "dim the
   # screen" on Linux — it depends on the panel — so a resolver detects which of
   # three tiers to use and stashes the choice in ${brightnessEnv}; brightnessSet
@@ -455,7 +482,7 @@ let
       "position": "bottom",
       "height": 50,
       "modules-left": ["custom/home", "custom/setup"],
-      "modules-center": [],
+      "modules-center": ["custom/prev", "custom/next"],
       "modules-right": ["custom/kbd"],
       "custom/kbd": {
         "format": "⌨  Keyboard",
@@ -471,6 +498,16 @@ let
         "format": "⚙  Config",
         "tooltip": false,
         "on-click": "${cdpNav} ${daemonBase}/setup"
+      },
+      "custom/prev": {
+        "format": "◀  Prev",
+        "tooltip": false,
+        "on-click": "${pagePrev}"
+      },
+      "custom/next": {
+        "format": "Next  ▶",
+        "tooltip": false,
+        "on-click": "${pageNext}"
       }
     }
   '';
@@ -487,6 +524,8 @@ let
     }
     #custom-home,
     #custom-setup,
+    #custom-prev,
+    #custom-next,
     #custom-kbd {
       padding: 0 16px;
       margin: 5px;
@@ -495,6 +534,8 @@ let
     }
     #custom-home:active,
     #custom-setup:active,
+    #custom-prev:active,
+    #custom-next:active,
     #custom-kbd:active {
       background: #33415a;
     }
@@ -538,6 +579,10 @@ let
 
     # Applies display on/off requests from the daemon (MQTT "Display" light).
     exec ${displayAgent}
+
+    # Navigates the browser when a page is pushed/cycled (MQTT select + Next/Prev,
+    # or the waybar Prev/Next buttons).
+    exec ${navAgent}
 
     # Re-powers the display on the next input event after the Off button blanks it.
     exec ${wakeAgent}
@@ -659,6 +704,9 @@ in
       # Reverse FIFO: the in-session agents report the actual power state; the
       # daemon reads it and republishes over MQTT so HA stays in sync.
       "p /var/lib/dashboard/display-state.fifo 0660 ha-dashboard dashboard - -"
+      # Nav FIFO: the daemon writes a target URL; the in-session nav agent reads
+      # it and navigates the browser.
+      "p /var/lib/dashboard/nav.fifo 0660 ha-dashboard dashboard - -"
     ];
 
     hardware.graphics.enable = true;

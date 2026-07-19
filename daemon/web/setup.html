@@ -54,6 +54,7 @@
     <nav class="tabs">
       <a id="tab-btn-setup" class="tab active">Dashboard</a>
       <a id="tab-btn-mqtt" class="tab">MQTT</a>
+      <a id="tab-btn-pages" class="tab">Pages</a>
     </nav>
 
     <div id="panel-setup">
@@ -102,6 +103,19 @@
 
       <button id="mqttSave" type="button">Save MQTT settings</button>
       <div id="mqttMsg" class="msg"></div>
+    </div>
+
+    <div id="panel-pages" class="hidden">
+      <p class="hint">
+        Pages you can push to the display from Home Assistant (a Page dropdown plus
+        Next/Previous buttons) and cycle with the ◀ ▶ buttons on the bar. Each needs
+        a URL; the name is the label shown in Home Assistant.
+      </p>
+
+      <div id="pageRows"></div>
+      <button id="pageAdd" type="button" style="background:#263241;border-color:#2a3644;">+ Add page</button>
+      <button id="pageSave" type="button">Save pages</button>
+      <div id="pageMsg" class="msg"></div>
     </div>
   </div>
 
@@ -210,14 +224,16 @@
       }
     }
 
-    // Tabs: the Dashboard (Wi-Fi + HA URL) panel and the MQTT panel.
+    // Tabs: Dashboard (Wi-Fi + HA URL), MQTT, and Pages.
     function showTab(name) {
-      $("panel-setup").classList.toggle("hidden", name !== "setup");
-      $("panel-mqtt").classList.toggle("hidden", name !== "mqtt");
-      $("tab-btn-setup").classList.toggle("active", name === "setup");
-      $("tab-btn-mqtt").classList.toggle("active", name === "mqtt");
+      for (const t of ["setup", "mqtt", "pages"]) {
+        $("panel-" + t).classList.toggle("hidden", name !== t);
+        $("tab-btn-" + t).classList.toggle("active", name === t);
+      }
       if (name === "mqtt") loadMQTT();
+      if (name === "pages") loadPages();
     }
+    $("tab-btn-pages").addEventListener("click", () => showTab("pages"));
     $("tab-btn-setup").addEventListener("click", () => showTab("setup"));
     $("tab-btn-mqtt").addEventListener("click", () => showTab("mqtt"));
 
@@ -272,6 +288,64 @@
       }
     }
     $("mqttSave").addEventListener("click", saveMQTT);
+
+    // Pages: an editable list of name+URL rows pushed to HA.
+    const pmsg = (text, cls) => { const m = $("pageMsg"); m.textContent = text; m.className = "msg " + (cls || ""); };
+
+    function addPageRow(name, url) {
+      const row = document.createElement("div");
+      row.className = "row";
+      row.style.marginTop = ".5rem";
+      const n = document.createElement("input");
+      n.type = "text"; n.placeholder = "Name (optional)"; n.value = name || ""; n.style.flex = "0 0 34%";
+      const u = document.createElement("input");
+      u.type = "url"; u.inputMode = "url"; u.placeholder = "https://…"; u.value = url || ""; u.style.flex = "1";
+      const del = document.createElement("button");
+      del.type = "button"; del.textContent = "✕";
+      del.onclick = () => row.remove();
+      row.append(n, u, del);
+      $("pageRows").appendChild(row);
+    }
+
+    let pagesLoaded = false;
+    async function loadPages() {
+      if (pagesLoaded) return;
+      pagesLoaded = true;
+      try {
+        const data = await (await fetch("/api/urls")).json();
+        $("pageRows").innerHTML = "";
+        for (const p of (data.pages || [])) addPageRow(p.name, p.url);
+        if (!(data.pages || []).length) addPageRow("", "");
+      } catch (e) {
+        pmsg("Could not load pages: " + e.message, "err");
+        pagesLoaded = false;
+      }
+    }
+
+    async function savePages() {
+      const pages = [];
+      for (const row of $("pageRows").children) {
+        const [n, u] = row.querySelectorAll("input");
+        if (u.value.trim()) pages.push({ name: n.value.trim(), url: u.value.trim() });
+      }
+      $("pageSave").disabled = true;
+      pmsg("Saving…");
+      try {
+        const res = await fetch("/api/urls", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ pages }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        pmsg(pages.length + " page(s) saved.", "ok");
+      } catch (e) {
+        pmsg("Could not save: " + e.message, "err");
+      } finally {
+        $("pageSave").disabled = false;
+      }
+    }
+    $("pageAdd").addEventListener("click", () => addPageRow("", ""));
+    $("pageSave").addEventListener("click", savePages);
 
     $("rescan").addEventListener("click", () => scan(true));
     $("submit").addEventListener("click", submit);
