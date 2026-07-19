@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 // readMem returns total and used physical memory in MiB. "Used" is
@@ -43,4 +44,18 @@ func readMem() (totalMiB, usedMiB int, err error) {
 	}
 	// /proc/meminfo is in kB (KiB); divide by 1024 for MiB.
 	return int(total / 1024), int((total - avail) / 1024), nil
+}
+
+// readDisk returns total and used space of the root filesystem in GiB. "Used" is
+// total - free (what `df` reports as used), on the grown-to-fill root partition.
+func readDisk() (totalGiB, usedGiB float64, err error) {
+	var st syscall.Statfs_t
+	if err := syscall.Statfs("/", &st); err != nil {
+		return 0, 0, err
+	}
+	bs := uint64(st.Bsize)
+	total := st.Blocks * bs
+	used := (st.Blocks - st.Bfree) * bs
+	const gib = 1024 * 1024 * 1024
+	return float64(total) / gib, float64(used) / gib, nil
 }

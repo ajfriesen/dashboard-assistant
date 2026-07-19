@@ -143,6 +143,12 @@ type Bridge struct {
 	memUsedTopic      string
 	memTotalDiscovery string
 	memUsedDiscovery  string
+
+	// Storage sensors (absolute GiB).
+	diskTotalTopic     string
+	diskUsedTopic      string
+	diskTotalDiscovery string
+	diskUsedDiscovery  string
 }
 
 func newBridge(cfg MQTTConfig, disp *Display, pages *Pages, act *Activity) *Bridge {
@@ -177,6 +183,11 @@ func newBridge(cfg MQTTConfig, disp *Display, pages *Pages, act *Activity) *Brid
 		memUsedTopic:      base + "/mem/used",
 		memTotalDiscovery: disco("sensor", "mem_total"),
 		memUsedDiscovery:  disco("sensor", "mem_used"),
+
+		diskTotalTopic:     base + "/disk/total",
+		diskUsedTopic:      base + "/disk/used",
+		diskTotalDiscovery: disco("sensor", "disk_total"),
+		diskUsedDiscovery:  disco("sensor", "disk_used"),
 	}
 }
 
@@ -264,6 +275,7 @@ func (m *MQTTManager) PublishTelemetry() {
 		b.ifConnected(func(c mqtt.Client) {
 			b.publishActivity(c)
 			b.publishMemory(c)
+			b.publishDisk(c)
 		})
 	})
 }
@@ -357,15 +369,16 @@ func (b *Bridge) onConnect(client mqtt.Client) {
 	})
 	b.publish(client, b.touchDiscovery, touch, true)
 
-	// Memory sensors (absolute MiB). Total is effectively constant; used varies.
-	memSensor := func(obj, name, stateTopic string, stateClass bool) []byte {
+	// Data-size sensors (memory in MiB, storage in GiB). Totals are effectively
+	// constant; used varies (state_class measurement).
+	dataSensor := func(obj, name, stateTopic, unit, icon string, stateClass bool) []byte {
 		m := map[string]any{
 			"name":                name,
 			"unique_id":           b.cfg.NodeID + "_" + obj,
 			"state_topic":         stateTopic,
-			"unit_of_measurement": "MiB",
+			"unit_of_measurement": unit,
 			"device_class":        "data_size",
-			"icon":                "mdi:memory",
+			"icon":                icon,
 			"availability_topic":  b.statusTopic,
 			"device":              b.device(),
 		}
@@ -375,8 +388,10 @@ func (b *Bridge) onConnect(client mqtt.Client) {
 		p, _ := json.Marshal(m)
 		return p
 	}
-	b.publish(client, b.memTotalDiscovery, memSensor("mem_total", "Memory total", b.memTotalTopic, false), true)
-	b.publish(client, b.memUsedDiscovery, memSensor("mem_used", "Memory used", b.memUsedTopic, true), true)
+	b.publish(client, b.memTotalDiscovery, dataSensor("mem_total", "Memory total", b.memTotalTopic, "MiB", "mdi:memory", false), true)
+	b.publish(client, b.memUsedDiscovery, dataSensor("mem_used", "Memory used", b.memUsedTopic, "MiB", "mdi:memory", true), true)
+	b.publish(client, b.diskTotalDiscovery, dataSensor("disk_total", "Storage total", b.diskTotalTopic, "GiB", "mdi:harddisk", false), true)
+	b.publish(client, b.diskUsedDiscovery, dataSensor("disk_used", "Storage used", b.diskUsedTopic, "GiB", "mdi:harddisk", true), true)
 
 	// Announce availability and current state, then listen for commands.
 	b.publish(client, b.statusTopic, []byte("online"), true)
@@ -385,6 +400,7 @@ func (b *Bridge) onConnect(client mqtt.Client) {
 	b.publishPageState(client)
 	b.publishActivity(client)
 	b.publishMemory(client)
+	b.publishDisk(client)
 
 	subs := []struct {
 		topic string
@@ -479,6 +495,19 @@ func (b *Bridge) publishMemory(client mqtt.Client) {
 	}
 	b.publish(client, b.memTotalTopic, []byte(strconv.Itoa(total)), true)
 	b.publish(client, b.memUsedTopic, []byte(strconv.Itoa(used)), false)
+}
+
+// publishDisk publishes total and used root-filesystem space in GiB (one
+// decimal). Total is retained (near constant); used is not.
+func (b *Bridge) publishDisk(client mqtt.Client) {
+	total, used, err := readDisk()
+	if err != nil {
+		log.Printf("mqtt: read disk: %v", err)
+		return
+	}
+	gib := func(v float64) []byte { return []byte(strconv.FormatFloat(v, 'f', 1, 64)) }
+	b.publish(client, b.diskTotalTopic, gib(total), true)
+	b.publish(client, b.diskUsedTopic, gib(used), false)
 }
 
 func (b *Bridge) onCommand(client mqtt.Client, msg mqtt.Message) {
