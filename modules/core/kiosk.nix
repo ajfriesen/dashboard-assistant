@@ -121,10 +121,16 @@ let
     while true; do
       while IFS= read -r cmd; do
         # Apply, then report the actual state back so HA reflects it — this also
-        # covers commands that originate outside MQTT.
+        # covers commands that originate outside MQTT. Arm/disarm the wake-on-
+        # touch flag here too (not just on the Off button), so an MQTT/HA power-
+        # off also lets the next touch re-power the display.
         case "$cmd" in
-          on)  ${pkgs.sway}/bin/swaymsg 'output * power on'  >/dev/null 2>&1 || true; ${reportDisplayState} on  ;;
-          off) ${pkgs.sway}/bin/swaymsg 'output * power off' >/dev/null 2>&1 || true; ${reportDisplayState} off ;;
+          on)  ${pkgs.sway}/bin/swaymsg 'output * power on'  >/dev/null 2>&1 || true
+               ${pkgs.coreutils}/bin/rm -f ${displayOffFlag} 2>/dev/null || true
+               ${reportDisplayState} on  ;;
+          off) ${pkgs.sway}/bin/swaymsg 'output * power off' >/dev/null 2>&1 || true
+               ${pkgs.coreutils}/bin/touch ${displayOffFlag} 2>/dev/null || true
+               ${reportDisplayState} off ;;
         esac
       done < "$fifo"
       ${pkgs.coreutils}/bin/sleep 1
