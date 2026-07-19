@@ -149,6 +149,10 @@ type Bridge struct {
 	diskUsedTopic      string
 	diskTotalDiscovery string
 	diskUsedDiscovery  string
+
+	// Count of installed NixOS generations.
+	genCountTopic     string
+	genCountDiscovery string
 }
 
 func newBridge(cfg MQTTConfig, disp *Display, pages *Pages, act *Activity) *Bridge {
@@ -188,6 +192,9 @@ func newBridge(cfg MQTTConfig, disp *Display, pages *Pages, act *Activity) *Brid
 		diskUsedTopic:      base + "/disk/used",
 		diskTotalDiscovery: disco("sensor", "disk_total"),
 		diskUsedDiscovery:  disco("sensor", "disk_used"),
+
+		genCountTopic:     base + "/generations/count",
+		genCountDiscovery: disco("sensor", "generations"),
 	}
 }
 
@@ -393,6 +400,18 @@ func (b *Bridge) onConnect(client mqtt.Client) {
 	b.publish(client, b.diskTotalDiscovery, dataSensor("disk_total", "Storage total", b.diskTotalTopic, "GiB", "mdi:harddisk", false), true)
 	b.publish(client, b.diskUsedDiscovery, dataSensor("disk_used", "Storage used", b.diskUsedTopic, "GiB", "mdi:harddisk", true), true)
 
+	gens, _ := json.Marshal(map[string]any{
+		"name":                "Generations",
+		"unique_id":           b.cfg.NodeID + "_generations",
+		"state_topic":         b.genCountTopic,
+		"unit_of_measurement": "generations",
+		"state_class":         "measurement",
+		"icon":                "mdi:layers-triple",
+		"availability_topic":  b.statusTopic,
+		"device":              b.device(),
+	})
+	b.publish(client, b.genCountDiscovery, gens, true)
+
 	// Announce availability and current state, then listen for commands.
 	b.publish(client, b.statusTopic, []byte("online"), true)
 	b.publishState(client)
@@ -401,6 +420,7 @@ func (b *Bridge) onConnect(client mqtt.Client) {
 	b.publishActivity(client)
 	b.publishMemory(client)
 	b.publishDisk(client)
+	b.publishGenerations(client)
 
 	subs := []struct {
 		topic string
@@ -508,6 +528,17 @@ func (b *Bridge) publishDisk(client mqtt.Client) {
 	gib := func(v float64) []byte { return []byte(strconv.FormatFloat(v, 'f', 1, 64)) }
 	b.publish(client, b.diskTotalTopic, gib(total), true)
 	b.publish(client, b.diskUsedTopic, gib(used), false)
+}
+
+// publishGenerations publishes how many NixOS system generations are installed
+// (a cheap stat of the profile links). Retained: it changes only on deploy/GC.
+func (b *Bridge) publishGenerations(client mqtt.Client) {
+	gens, err := listGenerations()
+	if err != nil {
+		log.Printf("mqtt: list generations: %v", err)
+		return
+	}
+	b.publish(client, b.genCountTopic, []byte(strconv.Itoa(len(gens))), true)
 }
 
 func (b *Bridge) onCommand(client mqtt.Client, msg mqtt.Message) {
