@@ -26,6 +26,7 @@ var (
 	mqttFile         = stateDir + "/mqtt.env"  // runtime MQTT settings, written by the web UI / config import
 	urlsFile         = stateDir + "/urls.json" // pushable page list (name+url), web UI / config import
 	navFifo          = stateDir + "/nav.fifo"  // daemon writes a URL; in-session agent navigates Chromium there
+	dmiFile          = stateDir + "/dmi.env"   // hardware serial, written by the daemon's root ExecStartPre (DMI is root-only)
 )
 
 const sessionUnit = "greetd.service" // the Sway kiosk session; restart relaunches it

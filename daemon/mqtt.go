@@ -153,6 +153,14 @@ type Bridge struct {
 	// Count of installed NixOS generations.
 	genCountTopic     string
 	genCountDiscovery string
+
+	// Device info / diagnostics.
+	hostnameTopic, hostnameDiscovery string
+	ipTopic, ipDiscovery             string
+	uptimeTopic, uptimeDiscovery     string
+	modelTopic, modelDiscovery       string
+	cpuTopic, cpuDiscovery           string
+	serialTopic, serialDiscovery     string
 }
 
 func newBridge(cfg MQTTConfig, disp *Display, pages *Pages, act *Activity) *Bridge {
@@ -195,6 +203,13 @@ func newBridge(cfg MQTTConfig, disp *Display, pages *Pages, act *Activity) *Brid
 
 		genCountTopic:     base + "/generations/count",
 		genCountDiscovery: disco("sensor", "generations"),
+
+		hostnameTopic: base + "/host/hostname", hostnameDiscovery: disco("sensor", "hostname"),
+		ipTopic: base + "/host/ip", ipDiscovery: disco("sensor", "ip"),
+		uptimeTopic: base + "/host/uptime", uptimeDiscovery: disco("sensor", "uptime"),
+		modelTopic: base + "/host/model", modelDiscovery: disco("sensor", "model"),
+		cpuTopic: base + "/host/cpu", cpuDiscovery: disco("sensor", "cpu"),
+		serialTopic: base + "/host/serial", serialDiscovery: disco("sensor", "serial"),
 	}
 }
 
@@ -283,6 +298,7 @@ func (m *MQTTManager) PublishTelemetry() {
 			b.publishActivity(c)
 			b.publishMemory(c)
 			b.publishDisk(c)
+			b.publishHostDynamic(c)
 		})
 	})
 }
@@ -412,6 +428,39 @@ func (b *Bridge) onConnect(client mqtt.Client) {
 	})
 	b.publish(client, b.genCountDiscovery, gens, true)
 
+	// Device info / diagnostic sensors. Grouped under HA's "Diagnostic" category.
+	diag := func(obj, name, stateTopic, unit, devClass, icon string) []byte {
+		m := map[string]any{
+			"name":               name,
+			"unique_id":          b.cfg.NodeID + "_" + obj,
+			"state_topic":        stateTopic,
+			"availability_topic": b.statusTopic,
+			"entity_category":    "diagnostic",
+			"icon":               icon,
+			"device":             b.device(),
+		}
+		if unit != "" {
+			m["unit_of_measurement"] = unit
+		}
+		if devClass != "" {
+			m["device_class"] = devClass
+		}
+		p, _ := json.Marshal(m)
+		return p
+	}
+	b.publish(client, b.hostnameDiscovery, diag("hostname", "Hostname", b.hostnameTopic, "", "", "mdi:server"), true)
+	b.publish(client, b.ipDiscovery, diag("ip", "IP address", b.ipTopic, "", "", "mdi:ip-network"), true)
+	b.publish(client, b.uptimeDiscovery, diag("uptime", "Uptime", b.uptimeTopic, "s", "duration", "mdi:clock-outline"), true)
+	b.publish(client, b.modelDiscovery, diag("model", "Model", b.modelTopic, "", "", "mdi:chip"), true)
+	b.publish(client, b.cpuDiscovery, diag("cpu", "CPU usage", b.cpuTopic, "%", "", "mdi:cpu-64-bit"), true)
+	b.publish(client, b.serialDiscovery, diag("serial", "Serial number", b.serialTopic, "", "", "mdi:barcode"), true)
+
+	// Static device info — publish once, retained (changes rarely / never).
+	b.publish(client, b.hostnameTopic, []byte(hostname()), true)
+	b.publish(client, b.modelTopic, []byte(readModel()), true)
+	b.publish(client, b.serialTopic, []byte(readSerial()), true)
+	b.publishHostDynamic(client)
+
 	// Announce availability and current state, then listen for commands.
 	b.publish(client, b.statusTopic, []byte("online"), true)
 	b.publishState(client)
@@ -539,6 +588,20 @@ func (b *Bridge) publishGenerations(client mqtt.Client) {
 		return
 	}
 	b.publish(client, b.genCountTopic, []byte(strconv.Itoa(len(gens))), true)
+}
+
+// publishHostDynamic publishes the changing device diagnostics: IP, uptime, and
+// CPU usage. On the telemetry ticker (and once on connect).
+func (b *Bridge) publishHostDynamic(client mqtt.Client) {
+	if ip := primaryIP(); ip != "" {
+		b.publish(client, b.ipTopic, []byte(ip), true)
+	}
+	if up, err := readUptime(); err == nil {
+		b.publish(client, b.uptimeTopic, []byte(strconv.Itoa(up)), false)
+	}
+	if pct, err := cpu.Usage(); err == nil {
+		b.publish(client, b.cpuTopic, []byte(strconv.Itoa(pct)), false)
+	}
 }
 
 func (b *Bridge) onCommand(client mqtt.Client, msg mqtt.Message) {

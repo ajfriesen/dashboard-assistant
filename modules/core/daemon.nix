@@ -23,6 +23,24 @@ let
     ${pkgs.systemd}/bin/systemctl reboot
   '';
 
+  # The DMI serial (/sys/class/dmi/id/*_serial) is root-only (0400), so the
+  # daemon (ha-dashboard) can't read it. This runs as root via ExecStartPre=+ and
+  # stashes a real serial in the state dir for the daemon to expose; junk BIOS
+  # placeholders are skipped so the daemon falls back to the machine-id.
+  dmiDump = pkgs.writeShellScript "ha-dmi-dump" ''
+    serial=""
+    for f in product_serial board_serial chassis_serial; do
+      v=$(${pkgs.coreutils}/bin/tr -d '\0' < /sys/class/dmi/id/"$f" 2>/dev/null | ${pkgs.coreutils}/bin/tr -d '\n')
+      case "$v" in
+        "" | "Default string" | "To be filled by O.E.M." | "None" | "Not Specified" | "System Serial Number" | "0") continue ;;
+      esac
+      serial="$v"; break
+    done
+    ${pkgs.coreutils}/bin/printf 'SERIAL=%s\n' "$serial" > /var/lib/dashboard/dmi.env
+    ${pkgs.coreutils}/bin/chown ha-dashboard:dashboard /var/lib/dashboard/dmi.env
+    ${pkgs.coreutils}/bin/chmod 0640 /var/lib/dashboard/dmi.env
+  '';
+
   ha-dashboard-api = pkgs.buildGoModule {
     pname = "ha-dashboard-api";
     version = "0.1.0";
@@ -51,6 +69,9 @@ in
     wants = [ "network.target" ];
 
     serviceConfig = {
+      # Runs as root (the `+` prefix) before the daemon to capture the root-only
+      # DMI serial for the hardware-serial sensor.
+      ExecStartPre = "+${dmiDump}";
       ExecStart = "${ha-dashboard-api}/bin/ha-dashboard-api";
       Restart = "on-failure";
       RestartSec = 2;
