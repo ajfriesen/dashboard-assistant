@@ -137,6 +137,12 @@ type Bridge struct {
 	// "Seconds since last touch" sensor.
 	touchStateTopic string
 	touchDiscovery  string
+
+	// Memory sensors (absolute MiB).
+	memTotalTopic     string
+	memUsedTopic      string
+	memTotalDiscovery string
+	memUsedDiscovery  string
 }
 
 func newBridge(cfg MQTTConfig, disp *Display, pages *Pages, act *Activity) *Bridge {
@@ -166,6 +172,11 @@ func newBridge(cfg MQTTConfig, disp *Display, pages *Pages, act *Activity) *Brid
 
 		touchStateTopic: base + "/touch/seconds",
 		touchDiscovery:  disco("sensor", "last_touch"),
+
+		memTotalTopic:     base + "/mem/total",
+		memUsedTopic:      base + "/mem/used",
+		memTotalDiscovery: disco("sensor", "mem_total"),
+		memUsedDiscovery:  disco("sensor", "mem_used"),
 	}
 }
 
@@ -246,10 +257,15 @@ func NewMQTTManager(disp *Display, pages *Pages, act *Activity) *MQTTManager {
 	return m
 }
 
-// PublishActivity republishes the touch sensor — called on a ticker so the count
-// climbs while the display is idle.
-func (m *MQTTManager) PublishActivity() {
-	m.withBridge(func(b *Bridge) { b.ifConnected(b.publishActivity) })
+// PublishTelemetry republishes the periodic sensors — the touch counter (so it
+// climbs while idle) and memory. Called on a ticker.
+func (m *MQTTManager) PublishTelemetry() {
+	m.withBridge(func(b *Bridge) {
+		b.ifConnected(func(c mqtt.Client) {
+			b.publishActivity(c)
+			b.publishMemory(c)
+		})
+	})
 }
 
 func (m *MQTTManager) withBridge(f func(*Bridge)) {
@@ -341,12 +357,34 @@ func (b *Bridge) onConnect(client mqtt.Client) {
 	})
 	b.publish(client, b.touchDiscovery, touch, true)
 
+	// Memory sensors (absolute MiB). Total is effectively constant; used varies.
+	memSensor := func(obj, name, stateTopic string, stateClass bool) []byte {
+		m := map[string]any{
+			"name":                name,
+			"unique_id":           b.cfg.NodeID + "_" + obj,
+			"state_topic":         stateTopic,
+			"unit_of_measurement": "MiB",
+			"device_class":        "data_size",
+			"icon":                "mdi:memory",
+			"availability_topic":  b.statusTopic,
+			"device":              b.device(),
+		}
+		if stateClass {
+			m["state_class"] = "measurement"
+		}
+		p, _ := json.Marshal(m)
+		return p
+	}
+	b.publish(client, b.memTotalDiscovery, memSensor("mem_total", "Memory total", b.memTotalTopic, false), true)
+	b.publish(client, b.memUsedDiscovery, memSensor("mem_used", "Memory used", b.memUsedTopic, true), true)
+
 	// Announce availability and current state, then listen for commands.
 	b.publish(client, b.statusTopic, []byte("online"), true)
 	b.publishState(client)
 	b.publishBrightness(client)
 	b.publishPageState(client)
 	b.publishActivity(client)
+	b.publishMemory(client)
 
 	subs := []struct {
 		topic string
@@ -429,6 +467,18 @@ func (b *Bridge) onPrevPage(_ mqtt.Client, _ mqtt.Message) { b.pages.Prev() }
 // live measurement that's always changing, so a retained stale value is noise.
 func (b *Bridge) publishActivity(client mqtt.Client) {
 	b.publish(client, b.touchStateTopic, []byte(strconv.Itoa(b.act.SecondsSince())), false)
+}
+
+// publishMemory publishes total and used physical memory in MiB. Total is
+// retained (it's a constant HA can show right after restart); used is not.
+func (b *Bridge) publishMemory(client mqtt.Client) {
+	total, used, err := readMem()
+	if err != nil {
+		log.Printf("mqtt: read memory: %v", err)
+		return
+	}
+	b.publish(client, b.memTotalTopic, []byte(strconv.Itoa(total)), true)
+	b.publish(client, b.memUsedTopic, []byte(strconv.Itoa(used)), false)
 }
 
 func (b *Bridge) onCommand(client mqtt.Client, msg mqtt.Message) {

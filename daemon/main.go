@@ -81,11 +81,11 @@ func main() {
 	// through an MQTT command.
 	go watchDisplayState(disp, act)
 
-	// Refresh the "seconds since last touch" sensor on a ticker so it climbs
-	// while idle (touches reset it to 0 immediately via the observer).
+	// Refresh the periodic sensors on a ticker: the touch counter (so it climbs
+	// while idle; touches reset it to 0 immediately via the observer) and memory.
 	go func() {
 		for range time.Tick(10 * time.Second) {
-			srv.mqtt.PublishActivity()
+			srv.mqtt.PublishTelemetry()
 		}
 	}()
 
