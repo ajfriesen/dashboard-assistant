@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 )
 
 //go:embed web
@@ -28,7 +29,8 @@ const (
 )
 
 type server struct {
-	nm *NetworkManager // nil if no Wi-Fi device / D-Bus unavailable
+	nm   *NetworkManager // nil if no Wi-Fi device / D-Bus unavailable
+	mqtt *MQTTManager    // owns the runtime-reconfigurable MQTT bridge
 }
 
 // deriveState implements the first-boot decision flow.
@@ -60,14 +62,12 @@ func main() {
 		// Provisioning is degraded but the daemon still serves state/health.
 		log.Printf("warning: NetworkManager unavailable: %v", err)
 	}
-	srv := &server{nm: nm}
+	srv := &server{nm: nm, mqtt: NewMQTTManager(NewDisplay())}
 
-	// MQTT bridge to Home Assistant (opt-in: disabled unless MQTT_BROKER is set).
-	if cfg := mqttConfigFromEnv(); cfg.Broker != "" {
-		go newBridge(cfg, NewDisplay()).run()
-	} else {
-		log.Printf("mqtt: disabled (MQTT_BROKER unset)")
-	}
+	// MQTT bridge to Home Assistant (opt-in: disabled unless a broker is set).
+	// Settings come from the environment overlaid by the runtime state file the
+	// setup UI / config import write, so this also picks up later changes.
+	srv.mqtt.Apply(loadMQTTConfig())
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -86,6 +86,9 @@ func main() {
 	// Import a YAML config bundle (HA URL / token / Wi-Fi), fed by the USB and
 	// ESP importers. Loopback only, like the rest of the provisioning surface.
 	mux.Handle("/api/import", loopbackOnly(http.HandlerFunc(srv.handleImport)))
+	// MQTT settings surface for the setup UI: GET the current config, POST to
+	// change it. Loopback only — it carries the broker password.
+	mux.Handle("/api/mqtt", loopbackOnly(http.HandlerFunc(srv.handleMQTT)))
 
 	mux.HandleFunc("/", srv.handleRoot)
 
@@ -236,6 +239,61 @@ func (s *server) handleImport(w http.ResponseWriter, r *http.Request) {
 				log.Printf("restart kiosk: %v", err)
 			}
 		}()
+	}
+}
+
+// mqttView is the MQTT config as exchanged with the setup UI. The password is
+// write-only: GET never echoes it back (only whether one is stored, via
+// PasswordSet), and a blank password on POST keeps the stored one so you can
+// edit other fields without re-typing the secret.
+type mqttView struct {
+	Broker          string `json:"broker"`
+	Username        string `json:"username"`
+	Password        string `json:"password,omitempty"`
+	NodeID          string `json:"node_id"`
+	DiscoveryPrefix string `json:"discovery_prefix"`
+	PasswordSet     bool   `json:"password_set"`
+}
+
+func (s *server) handleMQTT(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		cfg := loadMQTTConfig()
+		writeJSON(w, http.StatusOK, mqttView{
+			Broker:          cfg.Broker,
+			Username:        cfg.Username,
+			NodeID:          cfg.NodeID,
+			DiscoveryPrefix: cfg.DiscoveryPrefix,
+			PasswordSet:     cfg.Password != "",
+		})
+
+	case http.MethodPost:
+		var in mqttView
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad json"})
+			return
+		}
+		cfg := MQTTConfig{
+			Broker:          strings.TrimSpace(in.Broker),
+			Username:        strings.TrimSpace(in.Username),
+			Password:        in.Password,
+			NodeID:          strings.TrimSpace(in.NodeID),
+			DiscoveryPrefix: strings.TrimSpace(in.DiscoveryPrefix),
+		}
+		// Blank password on save keeps the existing secret (the UI never receives
+		// it to echo back), so editing the broker doesn't wipe the password.
+		if cfg.Password == "" {
+			cfg.Password = loadMQTTConfig().Password
+		}
+		if err := writeMQTTConfig(cfg); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		s.mqtt.Apply(cfg.withDefaults())
+		writeJSON(w, http.StatusOK, map[string]string{"state": "saved"})
+
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "GET or POST only"})
 	}
 }
 

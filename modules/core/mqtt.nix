@@ -1,7 +1,15 @@
 # MQTT bridge to Home Assistant. The daemon publishes the dashboard as HA
 # entities over MQTT (currently one: the display, as an on/off light) using
-# MQTT discovery. It's opt-in: the daemon enables MQTT only when MQTT_BROKER is
-# set, which this module supplies via an EnvironmentFile.
+# MQTT discovery. It's opt-in: the daemon enables MQTT only when a broker is
+# set.
+#
+# There are two ways to configure it, and the daemon merges them:
+#   1. This module's EnvironmentFile — a declarative baseline baked at flash time.
+#   2. The runtime state file /var/lib/dashboard/mqtt.env, written by the setup
+#      web UI (MQTT tab) and by config import (the `mqtt:` YAML block). This
+#      *overrides* the EnvironmentFile, since it reflects a later user choice.
+# So this option is optional: MQTT can be set up entirely from the UI / a USB
+# bundle after flashing, with no rebuild.
 #
 # Credentials live in a file *outside* the Nix store (which is world-readable),
 # the same reason the HA token isn't baked into the store. See daemon/mqtt.go.

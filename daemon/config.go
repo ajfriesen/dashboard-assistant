@@ -20,6 +20,7 @@ var (
 	markerFile  = stateDir + "/provisioned"
 	tokenFile   = stateDir + "/token"        // long-lived HA token for kiosk login injection
 	displayFifo = stateDir + "/display.fifo" // daemon writes on/off; kiosk agent applies via swaymsg
+	mqttFile    = stateDir + "/mqtt.env"     // runtime MQTT settings, written by the web UI / config import
 )
 
 const sessionUnit = "greetd.service" // the Sway kiosk session; restart relaunches it
@@ -70,6 +71,35 @@ func writeHAURL(url string) error {
 		return err
 	}
 	return os.Rename(tmp, runtimeEnv)
+}
+
+// parseEnvFile reads a KEY=VALUE file in the systemd EnvironmentFile style: one
+// pair per line, `#` comments and blank lines ignored, optional surrounding
+// double-quotes stripped. A missing file yields an empty map and no error, so
+// callers can treat "not configured yet" the same as "configured empty".
+func parseEnvFile(path string) (map[string]string, error) {
+	m := map[string]string{}
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return m, nil
+		}
+		return nil, err
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		m[strings.TrimSpace(k)] = strings.Trim(strings.TrimSpace(v), `"`)
+	}
+	return m, sc.Err()
 }
 
 // writeToken atomically stores the long-lived HA access token. Mode 0640: a

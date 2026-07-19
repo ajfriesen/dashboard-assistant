@@ -33,6 +33,14 @@
     .banner.hidden { display: none; }
     .toggle { margin-top: .9rem; }
     .toggle a { color: #6ea8fe; text-decoration: none; font-size: .9rem; cursor: pointer; }
+    .tabs { display: flex; gap: .5rem; margin: 0 0 1.25rem; }
+    .tab {
+      flex: 1; text-align: center; padding: .6rem 1rem; border-radius: 10px;
+      background: #182029; border: 1px solid #2a3644; color: #9fb0c0;
+      cursor: pointer; font-size: .95rem; user-select: none; touch-action: manipulation;
+    }
+    .tab.active { background: #263241; color: #e8edf2; border-color: #2f81f7; }
+    .hint { color: #9fb0c0; font-size: .9rem; margin: 0 0 .25rem; line-height: 1.45; }
     .hidden { display: none; }
     .msg { margin-top: 1rem; min-height: 1.4rem; font-size: .95rem; }
     .msg.err { color: #ff6b6b; }
@@ -43,26 +51,58 @@
   <div class="card">
     <h1>Set up your dashboard</h1>
 
-    <div id="banner" class="banner hidden"></div>
+    <nav class="tabs">
+      <a id="tab-btn-setup" class="tab active">Dashboard</a>
+      <a id="tab-btn-mqtt" class="tab">MQTT</a>
+    </nav>
 
-    <div id="wifiFields" class="hidden">
-      <label for="ssid">Wi-Fi network</label>
-      <div class="row">
-        <select id="ssid"><option value="">Scanning…</option></select>
-        <button id="rescan" type="button">Rescan</button>
+    <div id="panel-setup">
+      <div id="banner" class="banner hidden"></div>
+
+      <div id="wifiFields" class="hidden">
+        <label for="ssid">Wi-Fi network</label>
+        <div class="row">
+          <select id="ssid"><option value="">Scanning…</option></select>
+          <button id="rescan" type="button">Rescan</button>
+        </div>
+
+        <label for="psk">Wi-Fi password</label>
+        <input id="psk" type="password" autocomplete="off" placeholder="Leave blank for open networks">
       </div>
 
-      <label for="psk">Wi-Fi password</label>
-      <input id="psk" type="password" autocomplete="off" placeholder="Leave blank for open networks">
+      <div id="toggle" class="toggle hidden"></div>
+
+      <label for="haurl">Home Assistant address</label>
+      <input id="haurl" type="url" inputmode="url" value="http://homeassistant.local:8123">
+
+      <button id="submit" type="button">Connect</button>
+      <div id="msg" class="msg"></div>
     </div>
 
-    <div id="toggle" class="toggle hidden"></div>
+    <div id="panel-mqtt" class="hidden">
+      <p class="hint">
+        Publish this dashboard to Home Assistant over MQTT — it exposes the display
+        as a light and is discovered automatically. Leave the broker blank to disable.
+      </p>
 
-    <label for="haurl">Home Assistant address</label>
-    <input id="haurl" type="url" inputmode="url" value="http://homeassistant.local:8123">
+      <label for="mqttBroker">Broker URL</label>
+      <input id="mqttBroker" type="text" inputmode="url" autocomplete="off" placeholder="tcp://192.168.1.10:1883">
 
-    <button id="submit" type="button">Connect</button>
-    <div id="msg" class="msg"></div>
+      <label for="mqttUser">Username</label>
+      <input id="mqttUser" type="text" autocomplete="off" placeholder="Optional">
+
+      <label for="mqttPass">Password</label>
+      <input id="mqttPass" type="password" autocomplete="off" placeholder="Optional">
+
+      <label for="mqttNode">Node ID</label>
+      <input id="mqttNode" type="text" autocomplete="off" placeholder="Optional — defaults to the device id">
+
+      <label for="mqttPrefix">Discovery prefix</label>
+      <input id="mqttPrefix" type="text" autocomplete="off" placeholder="homeassistant">
+
+      <button id="mqttSave" type="button">Save MQTT settings</button>
+      <div id="mqttMsg" class="msg"></div>
+    </div>
   </div>
 
   <script>
@@ -169,6 +209,69 @@
         $("submit").disabled = false;
       }
     }
+
+    // Tabs: the Dashboard (Wi-Fi + HA URL) panel and the MQTT panel.
+    function showTab(name) {
+      $("panel-setup").classList.toggle("hidden", name !== "setup");
+      $("panel-mqtt").classList.toggle("hidden", name !== "mqtt");
+      $("tab-btn-setup").classList.toggle("active", name === "setup");
+      $("tab-btn-mqtt").classList.toggle("active", name === "mqtt");
+      if (name === "mqtt") loadMQTT();
+    }
+    $("tab-btn-setup").addEventListener("click", () => showTab("setup"));
+    $("tab-btn-mqtt").addEventListener("click", () => showTab("mqtt"));
+
+    const mmsg = (text, cls) => { const m = $("mqttMsg"); m.textContent = text; m.className = "msg " + (cls || ""); };
+
+    let mqttLoaded = false;
+    async function loadMQTT() {
+      if (mqttLoaded) return;
+      mqttLoaded = true;
+      try {
+        const c = await (await fetch("/api/mqtt")).json();
+        $("mqttBroker").value = c.broker || "";
+        $("mqttUser").value = c.username || "";
+        $("mqttNode").value = c.node_id || "";
+        $("mqttPrefix").value = c.discovery_prefix || "";
+        // The password is never sent back; note whether one is already stored.
+        $("mqttPass").placeholder = c.password_set ? "•••••• (unchanged)" : "Optional";
+      } catch (e) {
+        mmsg("Could not load MQTT settings: " + e.message, "err");
+        mqttLoaded = false;
+      }
+    }
+
+    async function saveMQTT() {
+      const body = {
+        broker: $("mqttBroker").value.trim(),
+        username: $("mqttUser").value.trim(),
+        password: $("mqttPass").value,
+        node_id: $("mqttNode").value.trim(),
+        discovery_prefix: $("mqttPrefix").value.trim(),
+      };
+      $("mqttSave").disabled = true;
+      mmsg("Saving…");
+      try {
+        const res = await fetch("/api/mqtt", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        mmsg(body.broker
+          ? "Saved — Home Assistant will discover this device."
+          : "Saved — MQTT disabled.", "ok");
+        // Clear the password box; the placeholder reflects the stored state.
+        $("mqttPass").value = "";
+        $("mqttPass").placeholder = body.broker && (body.password || $("mqttPass").placeholder.includes("unchanged"))
+          ? "•••••• (unchanged)" : "Optional";
+      } catch (e) {
+        mmsg("Could not save: " + e.message, "err");
+      } finally {
+        $("mqttSave").disabled = false;
+      }
+    }
+    $("mqttSave").addEventListener("click", saveMQTT);
 
     $("rescan").addEventListener("click", () => scan(true));
     $("submit").addEventListener("click", submit);

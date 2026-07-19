@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
@@ -20,21 +21,76 @@ type MQTTConfig struct {
 	DiscoveryPrefix string // HA MQTT discovery prefix, default "homeassistant"
 }
 
+// mqttConfigFromEnv reads the MQTT settings from the environment (as populated
+// by the Nix EnvironmentFile). It applies no defaults; loadMQTTConfig merges and
+// normalises.
 func mqttConfigFromEnv() MQTTConfig {
-	cfg := MQTTConfig{
+	return MQTTConfig{
 		Broker:          os.Getenv("MQTT_BROKER"),
 		Username:        os.Getenv("MQTT_USERNAME"),
 		Password:        os.Getenv("MQTT_PASSWORD"),
 		NodeID:          os.Getenv("MQTT_NODE_ID"),
 		DiscoveryPrefix: os.Getenv("MQTT_DISCOVERY_PREFIX"),
 	}
-	if cfg.NodeID == "" {
-		cfg.NodeID = defaultNodeID()
+}
+
+// loadMQTTConfig is the effective configuration: the baked-in environment (the
+// Nix EnvironmentFile) overlaid by the runtime state file that the web UI and
+// config import write, then normalised with defaults. The state file wins
+// because it reflects a later, explicit user choice.
+func loadMQTTConfig() MQTTConfig {
+	cfg := mqttConfigFromEnv()
+	if m, err := parseEnvFile(mqttFile); err != nil {
+		log.Printf("mqtt: read %s: %v", mqttFile, err)
+	} else {
+		overlay := func(dst *string, key string) {
+			if v, ok := m[key]; ok {
+				*dst = v
+			}
+		}
+		overlay(&cfg.Broker, "MQTT_BROKER")
+		overlay(&cfg.Username, "MQTT_USERNAME")
+		overlay(&cfg.Password, "MQTT_PASSWORD")
+		overlay(&cfg.NodeID, "MQTT_NODE_ID")
+		overlay(&cfg.DiscoveryPrefix, "MQTT_DISCOVERY_PREFIX")
 	}
-	if cfg.DiscoveryPrefix == "" {
-		cfg.DiscoveryPrefix = "homeassistant"
+	return cfg.withDefaults()
+}
+
+// withDefaults fills the optional fields: a stable NodeID from the machine-id
+// and the standard HA discovery prefix.
+func (c MQTTConfig) withDefaults() MQTTConfig {
+	if c.NodeID == "" {
+		c.NodeID = defaultNodeID()
 	}
-	return cfg
+	if c.DiscoveryPrefix == "" {
+		c.DiscoveryPrefix = "homeassistant"
+	}
+	return c
+}
+
+// writeMQTTConfig atomically persists the MQTT settings to the runtime state
+// file the daemon reads on start. Only non-empty fields are written. Mode 0640:
+// it carries the broker password, so it stays a secret readable by the daemon
+// and the shared `dashboard` group — not world-readable like runtime.env.
+func writeMQTTConfig(c MQTTConfig) error {
+	var b strings.Builder
+	writeLine := func(key, val string) {
+		if val != "" {
+			fmt.Fprintf(&b, "%s=%s\n", key, val)
+		}
+	}
+	writeLine("MQTT_BROKER", c.Broker)
+	writeLine("MQTT_USERNAME", c.Username)
+	writeLine("MQTT_PASSWORD", c.Password)
+	writeLine("MQTT_NODE_ID", c.NodeID)
+	writeLine("MQTT_DISCOVERY_PREFIX", c.DiscoveryPrefix)
+
+	tmp := mqttFile + ".tmp"
+	if err := os.WriteFile(tmp, []byte(b.String()), 0o640); err != nil {
+		return err
+	}
+	return os.Rename(tmp, mqttFile)
 }
 
 // defaultNodeID derives a stable id from the machine-id (falling back to the
@@ -55,8 +111,9 @@ func defaultNodeID() string {
 // commands it receives. For now it exposes a single entity: the display, as an
 // on/off light.
 type Bridge struct {
-	cfg  MQTTConfig
-	disp *Display
+	cfg    MQTTConfig
+	disp   *Display
+	client mqtt.Client
 
 	statusTopic    string // availability (LWT)
 	cmdTopic       string // HA -> us
@@ -76,10 +133,11 @@ func newBridge(cfg MQTTConfig, disp *Display) *Bridge {
 	}
 }
 
-// run connects and blocks-forever via the Paho auto-reconnect loop. Everything
-// that must survive a broker restart (discovery, availability, subscription) is
-// done in onConnect so it re-runs on every reconnect.
-func (b *Bridge) run() {
+// start connects and returns; the Paho goroutines keep the link alive in the
+// background. Everything that must survive a broker restart (discovery,
+// availability, subscription) is done in onConnect so it re-runs on every
+// reconnect.
+func (b *Bridge) start() {
 	opts := mqtt.NewClientOptions().
 		AddBroker(b.cfg.Broker).
 		SetClientID("ha-dashboard-"+b.cfg.NodeID).
@@ -98,12 +156,61 @@ func (b *Bridge) run() {
 	}
 
 	log.Printf("mqtt: connecting to %s as node %q", b.cfg.Broker, b.cfg.NodeID)
-	client := mqtt.NewClient(opts)
-	// With ConnectRetry the first Connect() also retries in the background.
-	if tok := client.Connect(); tok.Wait() && tok.Error() != nil {
-		log.Printf("mqtt: initial connect: %v", tok.Error())
+	b.client = mqtt.NewClient(opts)
+	// With ConnectRetry the initial Connect() token only completes once the
+	// broker is reachable, so wait for it off the caller's goroutine — start()
+	// must return promptly (it runs in the HTTP handler and at daemon boot).
+	go func() {
+		if tok := b.client.Connect(); tok.Wait() && tok.Error() != nil {
+			log.Printf("mqtt: initial connect: %v", tok.Error())
+		}
+	}()
+}
+
+// stop marks the device offline (if the link is up) and disconnects. Safe to
+// call on a bridge whose initial connect never succeeded.
+func (b *Bridge) stop() {
+	if b.client == nil {
+		return
 	}
-	select {} // block; the Paho goroutines do the work
+	if b.client.IsConnectionOpen() {
+		b.publish(b.client, b.statusTopic, []byte("offline"), true)
+	}
+	b.client.Disconnect(250)
+	log.Printf("mqtt: disconnected node %q", b.cfg.NodeID)
+}
+
+// MQTTManager owns the live bridge and lets the MQTT settings be reconfigured at
+// runtime, when the web UI or a config import changes them. Apply is idempotent:
+// it tears down any current bridge and starts a fresh one, or leaves MQTT
+// disabled when no broker is configured.
+type MQTTManager struct {
+	mu   sync.Mutex
+	disp *Display
+	cur  *Bridge
+}
+
+func NewMQTTManager(disp *Display) *MQTTManager {
+	return &MQTTManager{disp: disp}
+}
+
+// Apply (re)starts the bridge with cfg, replacing any running one. An empty
+// broker disables MQTT.
+func (m *MQTTManager) Apply(cfg MQTTConfig) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.cur != nil {
+		m.cur.stop()
+		m.cur = nil
+	}
+	if cfg.Broker == "" {
+		log.Printf("mqtt: disabled (no broker configured)")
+		return
+	}
+	b := newBridge(cfg, m.disp)
+	b.start()
+	m.cur = b
 }
 
 func (b *Bridge) onConnect(client mqtt.Client) {

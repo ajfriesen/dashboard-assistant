@@ -15,6 +15,13 @@ type importConfig struct {
 		SSID string `yaml:"ssid"`
 		PSK  string `yaml:"psk"`
 	} `yaml:"wifi"`
+	MQTT *struct {
+		Broker          string `yaml:"broker"`
+		Username        string `yaml:"username"`
+		Password        string `yaml:"password"`
+		NodeID          string `yaml:"node_id"`
+		DiscoveryPrefix string `yaml:"discovery_prefix"`
+	} `yaml:"mqtt"`
 }
 
 // applyImport parses a YAML bundle and applies whatever it carries: Wi-Fi first
@@ -54,6 +61,24 @@ func (s *server) applyImport(data []byte) ([]string, error) {
 			return applied, fmt.Errorf("mark provisioned: %w", err)
 		}
 		applied = append(applied, "ha_url:"+cfg.HAURL)
+	}
+
+	if cfg.MQTT != nil {
+		mc := MQTTConfig{
+			Broker:          cfg.MQTT.Broker,
+			Username:        cfg.MQTT.Username,
+			Password:        cfg.MQTT.Password,
+			NodeID:          cfg.MQTT.NodeID,
+			DiscoveryPrefix: cfg.MQTT.DiscoveryPrefix,
+		}
+		if err := writeMQTTConfig(mc); err != nil {
+			return applied, fmt.Errorf("write mqtt config: %w", err)
+		}
+		// Apply live so HA discovers the device without waiting for a restart.
+		if s.mqtt != nil {
+			s.mqtt.Apply(mc.withDefaults())
+		}
+		applied = append(applied, "mqtt")
 	}
 
 	return applied, nil
