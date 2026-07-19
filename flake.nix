@@ -11,6 +11,9 @@
     # Declarative btrfs+zstd disk layout + image builder for the on-disk target.
     disko.url = "github:nix-community/disko";
     disko.inputs.nixpkgs.follows = "nixpkgs";
+
+    # Board profiles (firmware, GPU, kernel bits) for the Raspberry Pi target.
+    nixos-hardware.url = "github:NixOS/nixos-hardware";
   };
 
   outputs =
@@ -19,6 +22,7 @@
       nixpkgs,
       impermanence,
       disko,
+      nixos-hardware,
     }:
     let
       system = "x86_64-linux";
@@ -54,6 +58,20 @@
           ]
           ++ localModules;
         };
+
+        # Raspberry Pi 4 (aarch64) — SD-card image, for bring-up/testing on a Pi.
+        # Build the flashable image via `.#rpi4-image` (aarch64; this host builds
+        # it via binfmt emulation, fetching most from the binary cache).
+        dashboard-rpi4 = lib.nixosSystem {
+          system = "aarch64-linux";
+          specialArgs = { inherit impermanence; };
+          modules = [
+            nixos-hardware.nixosModules.raspberry-pi-4
+            ./modules/hardware/rpi4.nix
+            ./modules/core/default.nix
+          ]
+          ++ localModules;
+        };
       };
 
       # Raw btrfs+zstd EFI disk image built by disko: `nix build .#disk-image`
@@ -67,6 +85,11 @@
         # the kiosk module pulls it in via callPackage.
         vboard = pkgs.callPackage ./packages/vboard.nix { };
       };
+
+      # Raspberry Pi 4 SD-card image: `nix build .#rpi4-image`, then flash
+      # result/sd-image/*.img.zst to the card (zstdcat | dd, or unzstd first).
+      packages.aarch64-linux.rpi4-image =
+        self.nixosConfigurations.dashboard-rpi4.config.system.build.sdImage;
 
       devShells.${system}.default = pkgs.mkShell {
         packages = [
