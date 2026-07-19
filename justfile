@@ -81,3 +81,24 @@ cdp-eval expr:
   jq -cn --arg e '{{expr}}' \
     '{id:1,method:"Runtime.evaluate",params:{expression:$e,returnByValue:true}}' \
     | timeout 5 websocat "$ws" || true
+
+# List the dashboard.* config options this OS defines (name, type, default,
+# description). Introspects the NixOS module options via optionAttrSetToDocList.
+options:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  nix eval --impure --json --expr '
+    let
+      f = builtins.getFlake (toString ./.);
+      lib = f.inputs.nixpkgs.lib;
+      docs = lib.optionAttrSetToDocList f.nixosConfigurations.dashboard-x86-disk.options.dashboard;
+    in map (o: {
+      name = o.name;
+      type = o.type;
+      default = if o ? default then (o.default.text or (builtins.toJSON o.default)) else "-";
+      description = o.description or "";
+    }) (builtins.filter (o: o.visible && !o.internal) docs)
+  ' | jq -r '
+    sort_by(.name)[] |
+    "\(.name)   (\(.type), default: \(.default))\n    \((.description // "") | gsub("[[:space:]]+";" ") | ltrimstr(" ") | if length>180 then .[0:180]+"…" else . end)\n"
+  '
