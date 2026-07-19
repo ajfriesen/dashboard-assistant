@@ -428,16 +428,19 @@ func (b *Bridge) onConnect(client mqtt.Client) {
 	})
 	b.publish(client, b.genCountDiscovery, gens, true)
 
-	// Device info / diagnostic sensors. Grouped under HA's "Diagnostic" category.
-	diag := func(obj, name, stateTopic, unit, devClass, icon string) []byte {
+	// Device info sensors. Regular sensors, except uptime, which stays in HA's
+	// "Diagnostic" category.
+	info := func(obj, name, stateTopic, unit, devClass, icon string, diagnostic bool) []byte {
 		m := map[string]any{
 			"name":               name,
 			"unique_id":          b.cfg.NodeID + "_" + obj,
 			"state_topic":        stateTopic,
 			"availability_topic": b.statusTopic,
-			"entity_category":    "diagnostic",
 			"icon":               icon,
 			"device":             b.device(),
+		}
+		if diagnostic {
+			m["entity_category"] = "diagnostic"
 		}
 		if unit != "" {
 			m["unit_of_measurement"] = unit
@@ -448,12 +451,12 @@ func (b *Bridge) onConnect(client mqtt.Client) {
 		p, _ := json.Marshal(m)
 		return p
 	}
-	b.publish(client, b.hostnameDiscovery, diag("hostname", "Hostname", b.hostnameTopic, "", "", "mdi:server"), true)
-	b.publish(client, b.ipDiscovery, diag("ip", "IP address", b.ipTopic, "", "", "mdi:ip-network"), true)
-	b.publish(client, b.uptimeDiscovery, diag("uptime", "Uptime", b.uptimeTopic, "s", "duration", "mdi:clock-outline"), true)
-	b.publish(client, b.modelDiscovery, diag("model", "Model", b.modelTopic, "", "", "mdi:chip"), true)
-	b.publish(client, b.cpuDiscovery, diag("cpu", "CPU usage", b.cpuTopic, "%", "", "mdi:cpu-64-bit"), true)
-	b.publish(client, b.serialDiscovery, diag("serial", "Serial number", b.serialTopic, "", "", "mdi:barcode"), true)
+	b.publish(client, b.hostnameDiscovery, info("hostname", "Hostname", b.hostnameTopic, "", "", "mdi:server", false), true)
+	b.publish(client, b.ipDiscovery, info("ip", "IP address", b.ipTopic, "", "", "mdi:ip-network", false), true)
+	b.publish(client, b.uptimeDiscovery, info("uptime", "Uptime", b.uptimeTopic, "s", "duration", "mdi:clock-outline", true), true)
+	b.publish(client, b.modelDiscovery, info("model", "Model", b.modelTopic, "", "", "mdi:chip", false), true)
+	b.publish(client, b.cpuDiscovery, info("cpu", "CPU usage", b.cpuTopic, "%", "", "mdi:cpu-64-bit", false), true)
+	b.publish(client, b.serialDiscovery, info("serial", "Serial number", b.serialTopic, "", "", "mdi:barcode", false), true)
 
 	// Static device info — publish once, retained (changes rarely / never).
 	b.publish(client, b.hostnameTopic, []byte(hostname()), true)
