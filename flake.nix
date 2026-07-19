@@ -13,7 +13,13 @@
     disko.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = { self, nixpkgs, impermanence, disko }:
+  outputs =
+    {
+      self,
+      nixpkgs,
+      impermanence,
+      disko,
+    }:
     let
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
@@ -32,7 +38,8 @@
           modules = [
             ./modules/hardware/generic-x86.nix
             ./modules/core/default.nix
-          ] ++ localModules;
+          ]
+          ++ localModules;
         };
 
         # Installed system — persistent, boots from a fixed SATA disk, updatable
@@ -44,15 +51,22 @@
             disko.nixosModules.disko
             ./modules/hardware/generic-x86-disk.nix
             ./modules/core/default.nix
-          ] ++ localModules;
+          ]
+          ++ localModules;
         };
       };
 
       # Raw btrfs+zstd EFI disk image built by disko: `nix build .#disk-image`
       # (or `just build-disk`), then dd result/ha-dashboard.raw to the SSD. The
       # layout lives in modules/hardware/disk-layout.nix.
-      packages.${system}.disk-image =
-        self.nixosConfigurations.dashboard-x86-disk.config.system.build.diskoImages;
+      packages.${system} = {
+        disk-image = self.nixosConfigurations.dashboard-x86-disk.config.system.build.diskoImages;
+
+        # vboard (on-screen keyboard) is packaged from source — not in nixpkgs.
+        # Exposed here so it can be built/tested standalone (`nix build .#vboard`);
+        # the kiosk module pulls it in via callPackage.
+        vboard = pkgs.callPackage ./packages/vboard.nix { };
+      };
 
       devShells.${system}.default = pkgs.mkShell {
         packages = [

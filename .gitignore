@@ -4,3 +4,4 @@ result-*
 
 # Stray Go build artifact — the daemon is built by buildGoModule
 /daemon/ha-dashboard-api
+ha.yaml
