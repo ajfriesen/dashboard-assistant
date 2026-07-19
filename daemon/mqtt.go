@@ -115,6 +115,7 @@ type Bridge struct {
 	cfg    MQTTConfig
 	disp   *Display
 	pages  *Pages
+	act    *Activity
 	client mqtt.Client
 
 	statusTopic      string // availability (LWT)
@@ -132,9 +133,13 @@ type Bridge struct {
 	pageSelectDiscovery  string
 	pageNextDiscovery    string
 	pagePrevDiscovery    string
+
+	// "Seconds since last touch" sensor.
+	touchStateTopic string
+	touchDiscovery  string
 }
 
-func newBridge(cfg MQTTConfig, disp *Display, pages *Pages) *Bridge {
+func newBridge(cfg MQTTConfig, disp *Display, pages *Pages, act *Activity) *Bridge {
 	base := "ha-dashboard/" + cfg.NodeID
 	disco := func(kind, obj string) string {
 		return fmt.Sprintf("%s/%s/%s/%s/config", cfg.DiscoveryPrefix, kind, cfg.NodeID, obj)
@@ -143,6 +148,7 @@ func newBridge(cfg MQTTConfig, disp *Display, pages *Pages) *Bridge {
 		cfg:              cfg,
 		disp:             disp,
 		pages:            pages,
+		act:              act,
 		statusTopic:      base + "/status",
 		cmdTopic:         base + "/display/set",
 		stateTopic:       base + "/display/state",
@@ -157,6 +163,9 @@ func newBridge(cfg MQTTConfig, disp *Display, pages *Pages) *Bridge {
 		pageSelectDiscovery:  disco("select", "page"),
 		pageNextDiscovery:    disco("button", "page_next"),
 		pagePrevDiscovery:    disco("button", "page_prev"),
+
+		touchStateTopic: base + "/touch/seconds",
+		touchDiscovery:  disco("sensor", "last_touch"),
 	}
 }
 
@@ -215,11 +224,12 @@ type MQTTManager struct {
 	mu    sync.Mutex
 	disp  *Display
 	pages *Pages
+	act   *Activity
 	cur   *Bridge
 }
 
-func NewMQTTManager(disp *Display, pages *Pages) *MQTTManager {
-	m := &MQTTManager{disp: disp, pages: pages}
+func NewMQTTManager(disp *Display, pages *Pages, act *Activity) *MQTTManager {
+	m := &MQTTManager{disp: disp, pages: pages, act: act}
 	// Republish whenever the display state changes (including reverse-channel
 	// reports), through whichever bridge is currently live.
 	disp.SetObserver(func() {
@@ -229,7 +239,17 @@ func NewMQTTManager(disp *Display, pages *Pages) *MQTTManager {
 	pages.SetObserver(func() {
 		m.withBridge(func(b *Bridge) { b.ifConnected(b.publishPageState) })
 	})
+	// Reset the touch sensor to 0 immediately on each touch.
+	act.SetObserver(func() {
+		m.withBridge(func(b *Bridge) { b.ifConnected(b.publishActivity) })
+	})
 	return m
+}
+
+// PublishActivity republishes the touch sensor — called on a ticker so the count
+// climbs while the display is idle.
+func (m *MQTTManager) PublishActivity() {
+	m.withBridge(func(b *Bridge) { b.ifConnected(b.publishActivity) })
 }
 
 func (m *MQTTManager) withBridge(f func(*Bridge)) {
@@ -274,7 +294,7 @@ func (m *MQTTManager) Apply(cfg MQTTConfig) {
 		log.Printf("mqtt: disabled (no broker configured)")
 		return
 	}
-	b := newBridge(cfg, m.disp, m.pages)
+	b := newBridge(cfg, m.disp, m.pages, m.act)
 	b.start()
 	m.cur = b
 }
@@ -308,11 +328,25 @@ func (b *Bridge) onConnect(client mqtt.Client) {
 	// Page select + Next/Prev buttons (their own entities, same device).
 	b.publishPageDiscovery(client)
 
+	// "Seconds since last touch" sensor.
+	touch, _ := json.Marshal(map[string]any{
+		"name":                "Seconds since last touch",
+		"unique_id":           b.cfg.NodeID + "_last_touch",
+		"state_topic":         b.touchStateTopic,
+		"unit_of_measurement": "s",
+		"state_class":         "measurement",
+		"icon":                "mdi:gesture-tap",
+		"availability_topic":  b.statusTopic,
+		"device":              b.device(),
+	})
+	b.publish(client, b.touchDiscovery, touch, true)
+
 	// Announce availability and current state, then listen for commands.
 	b.publish(client, b.statusTopic, []byte("online"), true)
 	b.publishState(client)
 	b.publishBrightness(client)
 	b.publishPageState(client)
+	b.publishActivity(client)
 
 	subs := []struct {
 		topic string
@@ -390,6 +424,12 @@ func (b *Bridge) onSelectPage(_ mqtt.Client, msg mqtt.Message) {
 
 func (b *Bridge) onNextPage(_ mqtt.Client, _ mqtt.Message) { b.pages.Next() }
 func (b *Bridge) onPrevPage(_ mqtt.Client, _ mqtt.Message) { b.pages.Prev() }
+
+// publishActivity publishes the seconds-since-last-touch. Not retained: it's a
+// live measurement that's always changing, so a retained stale value is noise.
+func (b *Bridge) publishActivity(client mqtt.Client) {
+	b.publish(client, b.touchStateTopic, []byte(strconv.Itoa(b.act.SecondsSince())), false)
+}
 
 func (b *Bridge) onCommand(client mqtt.Client, msg mqtt.Message) {
 	on := strings.EqualFold(strings.TrimSpace(string(msg.Payload())), "ON")

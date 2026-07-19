@@ -158,7 +158,21 @@ let
       [ "$pid" = "$$" ] || kill "$pid" 2>/dev/null || true
     done
 
-    ${pkgs.libinput}/bin/libinput debug-events 2>/dev/null | while IFS= read -r _ev; do
+    # Tail libinput. On each real input event (touch/pointer/key — skip device
+    # add/remove and other noise) report a touch to the daemon for the "seconds
+    # since last touch" sensor, rate-limited to once a second so a drag doesn't
+    # flood the FIFO. And if the display was blanked (flag set), power it on.
+    last=0
+    ${pkgs.libinput}/bin/libinput debug-events 2>/dev/null | while IFS= read -r ev; do
+      case "$ev" in
+        *TOUCH_*|*POINTER_*|*KEYBOARD_KEY*|*GESTURE_*|*SWITCH_*) ;;
+        *) continue ;;
+      esac
+      printf -v now '%(%s)T' -1
+      if [ "$now" != "$last" ]; then
+        ${reportDisplayState} touch
+        last=$now
+      fi
       if [ -e ${displayOffFlag} ]; then
         ${pkgs.sway}/bin/swaymsg 'output * power on' >/dev/null 2>&1 || true
         ${reportDisplayState} on

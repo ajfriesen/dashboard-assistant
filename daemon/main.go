@@ -68,7 +68,8 @@ func main() {
 	}
 	disp := NewDisplay()
 	pages := NewPages()
-	srv := &server{nm: nm, mqtt: NewMQTTManager(disp, pages), pages: pages}
+	act := NewActivity()
+	srv := &server{nm: nm, mqtt: NewMQTTManager(disp, pages, act), pages: pages}
 
 	// MQTT bridge to Home Assistant (opt-in: disabled unless a broker is set).
 	// Settings come from the environment overlaid by the runtime state file the
@@ -76,9 +77,17 @@ func main() {
 	srv.mqtt.Apply(loadMQTTConfig())
 
 	// Reverse channel: the in-session agents report the real display power state
-	// here (Off button, wake-on-touch, session restart), keeping HA in sync with
-	// changes that never went through an MQTT command.
-	go watchDisplayState(disp)
+	// and touch activity here, keeping HA in sync with changes that never went
+	// through an MQTT command.
+	go watchDisplayState(disp, act)
+
+	// Refresh the "seconds since last touch" sensor on a ticker so it climbs
+	// while idle (touches reset it to 0 immediately via the observer).
+	go func() {
+		for range time.Tick(10 * time.Second) {
+			srv.mqtt.PublishActivity()
+		}
+	}()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -397,7 +406,7 @@ func (s *server) handleReset(w http.ResponseWriter, r *http.Request) {
 // FIFO is opened O_RDWR so the daemon always keeps a writer fd of its own —
 // reads then block for data instead of hitting EOF each time a writer closes,
 // and writers never get ENXIO for a missing reader. Reopens on any error.
-func watchDisplayState(disp *Display) {
+func watchDisplayState(disp *Display, act *Activity) {
 	for {
 		f, err := os.OpenFile(displayStateFifo, os.O_RDWR, 0)
 		if err != nil {
@@ -413,6 +422,8 @@ func watchDisplayState(disp *Display) {
 				disp.Report(true)
 			case line == "off":
 				disp.Report(false)
+			case line == "touch":
+				act.Touch()
 			case strings.HasPrefix(line, "bright "):
 				if n, err := strconv.Atoi(strings.TrimSpace(line[len("bright "):])); err == nil {
 					disp.ReportBrightness(n)
