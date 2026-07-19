@@ -25,6 +25,17 @@ let
   # Set by the Off button after it DPMS-blanks the display; the wake agent
   # clears it and powers the display back on when input (e.g. a touch) arrives.
   displayOffFlag = "/var/lib/dashboard/display-off";
+  # Reverse status channel: the daemon can only track power changes it commands
+  # over MQTT, so anything that changes the panel in-session (Off button, wake-on-
+  # touch, a session restart) must report the *actual* state here for the daemon
+  # to republish — otherwise HA drifts out of sync. Best-effort, non-blocking:
+  # timeout guards the rare window where the daemon isn't holding the FIFO open,
+  # so reporting never wedges the caller. Read by watchDisplayState in the daemon.
+  displayStateFifo = "/var/lib/dashboard/display-state.fifo";
+  reportDisplayState = pkgs.writeShellScript "ha-report-display-state" ''
+    ${pkgs.coreutils}/bin/printf '%s\n' "$1" \
+      | ${pkgs.coreutils}/bin/timeout 1 ${pkgs.coreutils}/bin/tee ${displayStateFifo} >/dev/null 2>&1 || true
+  '';
   # Chromium's CDP endpoint; the port binds to loopback (127.0.0.1) by default.
   # Used both by the dev remote-debug flag and by token auto-login.
   cdpArgs = "--remote-debugging-port=9222 --remote-allow-origins=*";
@@ -100,12 +111,20 @@ let
       [ "$pid" = "$$" ] || kill "$pid" 2>/dev/null || true
     done
 
+    # Report the real power state once at startup: a session restart powers
+    # outputs back on, so the daemon's optimistic state (and HA) must be resynced.
+    init=$(${pkgs.sway}/bin/swaymsg -t get_outputs -r 2>/dev/null \
+      | ${lib.getExe pkgs.jq} -r 'if any(.[]; .power) then "on" else "off" end' 2>/dev/null)
+    [ -n "$init" ] && ${reportDisplayState} "$init"
+
     fifo=/var/lib/dashboard/display.fifo
     while true; do
       while IFS= read -r cmd; do
+        # Apply, then report the actual state back so HA reflects it — this also
+        # covers commands that originate outside MQTT.
         case "$cmd" in
-          on)  ${pkgs.sway}/bin/swaymsg 'output * power on'  >/dev/null 2>&1 || true ;;
-          off) ${pkgs.sway}/bin/swaymsg 'output * power off' >/dev/null 2>&1 || true ;;
+          on)  ${pkgs.sway}/bin/swaymsg 'output * power on'  >/dev/null 2>&1 || true; ${reportDisplayState} on  ;;
+          off) ${pkgs.sway}/bin/swaymsg 'output * power off' >/dev/null 2>&1 || true; ${reportDisplayState} off ;;
         esac
       done < "$fifo"
       ${pkgs.coreutils}/bin/sleep 1
@@ -129,6 +148,7 @@ let
     ${pkgs.libinput}/bin/libinput debug-events 2>/dev/null | while IFS= read -r _ev; do
       if [ -e ${displayOffFlag} ]; then
         ${pkgs.sway}/bin/swaymsg 'output * power on' >/dev/null 2>&1 || true
+        ${reportDisplayState} on
         ${pkgs.coreutils}/bin/rm -f ${displayOffFlag} 2>/dev/null || true
       fi
     done
@@ -435,7 +455,7 @@ let
       "custom/off": {
         "format": "⏻  Off",
         "tooltip": false,
-        "on-click": "${pkgs.sway}/bin/swaymsg 'output * power off'; ${pkgs.coreutils}/bin/touch ${displayOffFlag}"
+        "on-click": "${pkgs.sway}/bin/swaymsg 'output * power off'; ${pkgs.coreutils}/bin/touch ${displayOffFlag}; ${reportDisplayState} off"
       },
       "custom/dim": {
         "format": "🔅  Dim",
@@ -637,6 +657,9 @@ in
       "d /var/lib/dashboard 0775 ha-dashboard dashboard - -"
       # FIFO the daemon writes display on/off to; the in-session agent reads it.
       "p /var/lib/dashboard/display.fifo 0660 ha-dashboard dashboard - -"
+      # Reverse FIFO: the in-session agents report the actual power state; the
+      # daemon reads it and republishes over MQTT so HA stays in sync.
+      "p /var/lib/dashboard/display-state.fifo 0660 ha-dashboard dashboard - -"
     ];
 
     hardware.graphics.enable = true;

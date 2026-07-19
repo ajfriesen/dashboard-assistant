@@ -20,7 +20,10 @@ var (
 	markerFile  = stateDir + "/provisioned"
 	tokenFile   = stateDir + "/token"        // long-lived HA token for kiosk login injection
 	displayFifo = stateDir + "/display.fifo" // daemon writes on/off; kiosk agent applies via swaymsg
-	mqttFile    = stateDir + "/mqtt.env"     // runtime MQTT settings, written by the web UI / config import
+	// Reverse channel: in-session agents write the *actual* power state here and
+	// the daemon publishes it, so HA stays in sync with out-of-band changes.
+	displayStateFifo = stateDir + "/display-state.fifo"
+	mqttFile         = stateDir + "/mqtt.env" // runtime MQTT settings, written by the web UI / config import
 )
 
 const sessionUnit = "greetd.service" // the Sway kiosk session; restart relaunches it

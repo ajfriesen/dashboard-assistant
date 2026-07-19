@@ -6,6 +6,7 @@
 package main
 
 import (
+	"bufio"
 	"embed"
 	"encoding/json"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 )
 
 //go:embed web
@@ -62,12 +64,18 @@ func main() {
 		// Provisioning is degraded but the daemon still serves state/health.
 		log.Printf("warning: NetworkManager unavailable: %v", err)
 	}
-	srv := &server{nm: nm, mqtt: NewMQTTManager(NewDisplay())}
+	disp := NewDisplay()
+	srv := &server{nm: nm, mqtt: NewMQTTManager(disp)}
 
 	// MQTT bridge to Home Assistant (opt-in: disabled unless a broker is set).
 	// Settings come from the environment overlaid by the runtime state file the
 	// setup UI / config import write, so this also picks up later changes.
 	srv.mqtt.Apply(loadMQTTConfig())
+
+	// Reverse channel: the in-session agents report the real display power state
+	// here (Off button, wake-on-touch, session restart), keeping HA in sync with
+	// changes that never went through an MQTT command.
+	go watchDisplayState(disp)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -312,6 +320,36 @@ func (s *server) handleReset(w http.ResponseWriter, r *http.Request) {
 			log.Printf("restart kiosk: %v", err)
 		}
 	}()
+}
+
+// watchDisplayState tails the reverse FIFO, reporting each "on"/"off" line the
+// in-session agents write into the Display (which republishes over MQTT). The
+// FIFO is opened O_RDWR so the daemon always keeps a writer fd of its own —
+// reads then block for data instead of hitting EOF each time a writer closes,
+// and writers never get ENXIO for a missing reader. Reopens on any error.
+func watchDisplayState(disp *Display) {
+	for {
+		f, err := os.OpenFile(displayStateFifo, os.O_RDWR, 0)
+		if err != nil {
+			log.Printf("display-state: open %s: %v", displayStateFifo, err)
+			time.Sleep(time.Second)
+			continue
+		}
+		sc := bufio.NewScanner(f)
+		for sc.Scan() {
+			switch strings.TrimSpace(sc.Text()) {
+			case "on":
+				disp.Report(true)
+			case "off":
+				disp.Report(false)
+			}
+		}
+		if err := sc.Err(); err != nil {
+			log.Printf("display-state: read %s: %v", displayStateFifo, err)
+		}
+		f.Close()
+		time.Sleep(time.Second)
+	}
 }
 
 // loopbackOnly rejects requests that did not originate from the local host.

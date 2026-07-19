@@ -191,7 +191,18 @@ type MQTTManager struct {
 }
 
 func NewMQTTManager(disp *Display) *MQTTManager {
-	return &MQTTManager{disp: disp}
+	m := &MQTTManager{disp: disp}
+	// Republish whenever the display state changes (including reports from the
+	// reverse channel), through whichever bridge is currently live.
+	disp.SetObserver(func(bool) {
+		m.mu.Lock()
+		b := m.cur
+		m.mu.Unlock()
+		if b != nil {
+			b.publishStateNow()
+		}
+	})
+	return m
 }
 
 // Apply (re)starts the bridge with cfg, replacing any running one. An empty
@@ -256,7 +267,17 @@ func (b *Bridge) onCommand(client mqtt.Client, msg mqtt.Message) {
 		b.publishState(client)
 		return
 	}
-	b.publishState(client)
+	// On success Set fires the observer, which publishes the new state.
+}
+
+// publishStateNow publishes the current display state through this bridge, if it
+// is connected. Used by the state observer so both MQTT commands and reverse-
+// channel reports converge HA to reality.
+func (b *Bridge) publishStateNow() {
+	if b.client == nil || !b.client.IsConnectionOpen() {
+		return
+	}
+	b.publishState(b.client)
 }
 
 func (b *Bridge) publishState(client mqtt.Client) {
