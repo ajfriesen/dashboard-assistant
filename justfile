@@ -14,7 +14,7 @@ build-disk:
 # via binfmt emulation, fetching most from the binary cache — the Pi kernel +
 # image assembly still build locally, so it's slow. Then flash it to an SD card.
 build-rpi4:
-  nix build .#rpi4-image --out-link result-rpi4
+  nix build .#packages.aarch64-linux.rpi4-image --out-link result-rpi4
   @echo
   @echo "Image: $(readlink -f result-rpi4)/sd-image/"*.img.zst
   @echo "Flash it (confirm the device first!):"
