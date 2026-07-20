@@ -33,7 +33,7 @@
       # Assistant as the "installed" version and compares it against the newest
       # GitHub release tag to advertise updates. Bump it in lockstep with the
       # release tag you cut (tags may carry a leading "v"; the daemon strips it).
-      version = "0.1.0";
+      version = "0.2.0";
 
       # Optional per-build overrides (e.g. a seeded HA URL / debug flags). See
       # modules/local.example.nix. Must be git-tracked to be picked up.
