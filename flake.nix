@@ -29,6 +29,12 @@
       pkgs = nixpkgs.legacyPackages.${system};
       lib = nixpkgs.lib;
 
+      # Release version baked into every image. The daemon reports this to Home
+      # Assistant as the "installed" version and compares it against the newest
+      # GitHub release tag to advertise updates. Bump it in lockstep with the
+      # release tag you cut (tags may carry a leading "v"; the daemon strips it).
+      version = "0.1.0";
+
       # Optional per-build overrides (e.g. a seeded HA URL / debug flags). See
       # modules/local.example.nix. Must be git-tracked to be picked up.
       localModules = lib.optional (builtins.pathExists ./modules/local.nix) ./modules/local.nix;
@@ -38,7 +44,7 @@
         # Live ISO — boots from removable media (USB / SATA-via-USB adapter).
         dashboard-x86 = lib.nixosSystem {
           inherit system;
-          specialArgs = { inherit impermanence; };
+          specialArgs = { inherit impermanence version; };
           modules = [
             ./modules/hardware/generic-x86.nix
             ./modules/core/default.nix
@@ -50,7 +56,7 @@
         # with `nixos-rebuild switch`. Build a flashable image via `.#disk-image`.
         dashboard-x86-disk = lib.nixosSystem {
           inherit system;
-          specialArgs = { inherit impermanence; };
+          specialArgs = { inherit impermanence version; };
           modules = [
             disko.nixosModules.disko
             ./modules/hardware/generic-x86-disk.nix
@@ -64,7 +70,7 @@
         # it via binfmt emulation, fetching most from the binary cache).
         dashboard-rpi4 = lib.nixosSystem {
           system = "aarch64-linux";
-          specialArgs = { inherit impermanence; };
+          specialArgs = { inherit impermanence version; };
           modules = [
             nixos-hardware.nixosModules.raspberry-pi-4
             ./modules/hardware/rpi4.nix

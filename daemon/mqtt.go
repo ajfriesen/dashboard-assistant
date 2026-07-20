@@ -116,6 +116,7 @@ type Bridge struct {
 	disp   *Display
 	pages  *Pages
 	act    *Activity
+	upd    *UpdateChecker
 	client mqtt.Client
 
 	statusTopic      string // availability (LWT)
@@ -154,6 +155,10 @@ type Bridge struct {
 	genCountTopic     string
 	genCountDiscovery string
 
+	// System update: installed vs latest release (read-only for now).
+	updateStateTopic string
+	updateDiscovery  string
+
 	// Device info / diagnostics.
 	hostnameTopic, hostnameDiscovery string
 	ipTopic, ipDiscovery             string
@@ -163,7 +168,7 @@ type Bridge struct {
 	serialTopic, serialDiscovery     string
 }
 
-func newBridge(cfg MQTTConfig, disp *Display, pages *Pages, act *Activity) *Bridge {
+func newBridge(cfg MQTTConfig, disp *Display, pages *Pages, act *Activity, upd *UpdateChecker) *Bridge {
 	base := "ha-dashboard/" + cfg.NodeID
 	disco := func(kind, obj string) string {
 		return fmt.Sprintf("%s/%s/%s/%s/config", cfg.DiscoveryPrefix, kind, cfg.NodeID, obj)
@@ -173,6 +178,7 @@ func newBridge(cfg MQTTConfig, disp *Display, pages *Pages, act *Activity) *Brid
 		disp:             disp,
 		pages:            pages,
 		act:              act,
+		upd:              upd,
 		statusTopic:      base + "/status",
 		cmdTopic:         base + "/display/set",
 		stateTopic:       base + "/display/state",
@@ -203,6 +209,9 @@ func newBridge(cfg MQTTConfig, disp *Display, pages *Pages, act *Activity) *Brid
 
 		genCountTopic:     base + "/generations/count",
 		genCountDiscovery: disco("sensor", "generations"),
+
+		updateStateTopic: base + "/update/state",
+		updateDiscovery:  disco("update", "update"),
 
 		hostnameTopic: base + "/host/hostname", hostnameDiscovery: disco("sensor", "hostname"),
 		ipTopic: base + "/host/ip", ipDiscovery: disco("sensor", "ip"),
@@ -269,11 +278,12 @@ type MQTTManager struct {
 	disp  *Display
 	pages *Pages
 	act   *Activity
+	upd   *UpdateChecker
 	cur   *Bridge
 }
 
-func NewMQTTManager(disp *Display, pages *Pages, act *Activity) *MQTTManager {
-	m := &MQTTManager{disp: disp, pages: pages, act: act}
+func NewMQTTManager(disp *Display, pages *Pages, act *Activity, upd *UpdateChecker) *MQTTManager {
+	m := &MQTTManager{disp: disp, pages: pages, act: act, upd: upd}
 	// Republish whenever the display state changes (including reverse-channel
 	// reports), through whichever bridge is currently live.
 	disp.SetObserver(func() {
@@ -286,6 +296,10 @@ func NewMQTTManager(disp *Display, pages *Pages, act *Activity) *MQTTManager {
 	// Reset the touch sensor to 0 immediately on each touch.
 	act.SetObserver(func() {
 		m.withBridge(func(b *Bridge) { b.ifConnected(b.publishActivity) })
+	})
+	// Republish the update entity whenever a newer release is discovered.
+	upd.SetObserver(func() {
+		m.withBridge(func(b *Bridge) { b.ifConnected(b.publishUpdate) })
 	})
 	return m
 }
@@ -345,7 +359,7 @@ func (m *MQTTManager) Apply(cfg MQTTConfig) {
 		log.Printf("mqtt: disabled (no broker configured)")
 		return
 	}
-	b := newBridge(cfg, m.disp, m.pages, m.act)
+	b := newBridge(cfg, m.disp, m.pages, m.act, m.upd)
 	b.start()
 	m.cur = b
 }
@@ -428,6 +442,21 @@ func (b *Bridge) onConnect(client mqtt.Client) {
 	})
 	b.publish(client, b.genCountDiscovery, gens, true)
 
+	// System update entity: installed vs latest release. Read-only for now — no
+	// command_topic, so HA shows "update available" without an Install button.
+	// The JSON state payload uses HA's native update keys (installed_version,
+	// latest_version, release_url, …), so no value templates are needed.
+	update, _ := json.Marshal(map[string]any{
+		"name":               "System update",
+		"unique_id":          b.cfg.NodeID + "_update",
+		"state_topic":        b.updateStateTopic,
+		"device_class":       "firmware",
+		"availability_topic": b.statusTopic,
+		"icon":               "mdi:package-up",
+		"device":             b.device(),
+	})
+	b.publish(client, b.updateDiscovery, update, true)
+
 	// Device info sensors. Regular sensors, except uptime, which stays in HA's
 	// "Diagnostic" category.
 	info := func(obj, name, stateTopic, unit, devClass, icon string, diagnostic bool) []byte {
@@ -473,6 +502,7 @@ func (b *Bridge) onConnect(client mqtt.Client) {
 	b.publishMemory(client)
 	b.publishDisk(client)
 	b.publishGenerations(client)
+	b.publishUpdate(client)
 
 	subs := []struct {
 		topic string
@@ -646,6 +676,28 @@ func (b *Bridge) publishGenerations(client mqtt.Client) {
 		return
 	}
 	b.publish(client, b.genCountTopic, []byte(strconv.Itoa(len(gens))), true)
+}
+
+// publishUpdate publishes the update entity's JSON state (installed vs latest
+// release). Retained: it changes only when a new release lands, and HA should
+// have it right after its own restart. Optional fields are omitted when unknown.
+func (b *Bridge) publishUpdate(client mqtt.Client) {
+	st := b.upd.State()
+	payload := map[string]any{
+		"installed_version": st.Installed,
+		"latest_version":    st.Latest,
+	}
+	if st.URL != "" {
+		payload["release_url"] = st.URL
+	}
+	if st.Title != "" {
+		payload["title"] = st.Title
+	}
+	if st.Summary != "" {
+		payload["release_summary"] = st.Summary
+	}
+	p, _ := json.Marshal(payload)
+	b.publish(client, b.updateStateTopic, p, true)
 }
 
 // publishHostDynamic publishes the changing device diagnostics: IP, uptime, and

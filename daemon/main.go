@@ -69,7 +69,8 @@ func main() {
 	disp := NewDisplay()
 	pages := NewPages()
 	act := NewActivity()
-	srv := &server{nm: nm, mqtt: NewMQTTManager(disp, pages, act), pages: pages}
+	upd := NewUpdateChecker()
+	srv := &server{nm: nm, mqtt: NewMQTTManager(disp, pages, act, upd), pages: pages}
 
 	// MQTT bridge to Home Assistant (opt-in: disabled unless a broker is set).
 	// Settings come from the environment overlaid by the runtime state file the
@@ -80,6 +81,10 @@ func main() {
 	// and touch activity here, keeping HA in sync with changes that never went
 	// through an MQTT command.
 	go watchDisplayState(disp, act)
+
+	// Poll the release source for the latest version; the checker fires the MQTT
+	// bridge's observer to republish the update entity whenever it changes.
+	go upd.Run()
 
 	// Refresh the periodic sensors on a ticker: the touch counter (so it climbs
 	// while idle; touches reset it to 0 immediately via the observer) and memory.
