@@ -279,9 +279,9 @@ func NewMQTTManager(disp *Display, pages *Pages, act *Activity) *MQTTManager {
 	disp.SetObserver(func() {
 		m.withBridge((*Bridge).publishStateNow)
 	})
-	// Republish the current page whenever it changes.
+	// Republish the current page + editable slots whenever the list changes.
 	pages.SetObserver(func() {
-		m.withBridge(func(b *Bridge) { b.ifConnected(b.publishPageState) })
+		m.withBridge(func(b *Bridge) { b.ifConnected(b.publishPages) })
 	})
 	// Reset the touch sensor to 0 immediately on each touch.
 	act.SetObserver(func() {
@@ -326,7 +326,7 @@ func (m *MQTTManager) RepublishPageDiscovery() {
 	m.withBridge(func(b *Bridge) {
 		b.ifConnected(func(c mqtt.Client) {
 			b.publishPageDiscovery(c)
-			b.publishPageState(c)
+			b.publishPages(c)
 		})
 	})
 }
@@ -468,7 +468,7 @@ func (b *Bridge) onConnect(client mqtt.Client) {
 	b.publish(client, b.statusTopic, []byte("online"), true)
 	b.publishState(client)
 	b.publishBrightness(client)
-	b.publishPageState(client)
+	b.publishPages(client)
 	b.publishActivity(client)
 	b.publishMemory(client)
 	b.publishDisk(client)
@@ -483,6 +483,13 @@ func (b *Bridge) onConnect(client mqtt.Client) {
 		{b.pageSelectCmdTopic, b.onSelectPage},
 		{b.pageNextCmdTopic, b.onNextPage},
 		{b.pagePrevCmdTopic, b.onPrevPage},
+	}
+	// Editable "Page N" text slots.
+	for i := 0; i < pageSlots; i++ {
+		subs = append(subs, struct {
+			topic string
+			h     mqtt.MessageHandler
+		}{b.slotCmdTopic(i), b.onSlot(i)})
 	}
 	for _, s := range subs {
 		if tok := client.Subscribe(s.topic, 1, s.h); tok.Wait() && tok.Error() != nil {
@@ -502,10 +509,39 @@ func (b *Bridge) device() map[string]any {
 	}
 }
 
-// publishPageDiscovery (re)announces the page select and Next/Prev buttons. With
-// no pages configured it clears them (empty retained payload) so HA drops the
-// entities; HA also requires a select to have at least one option.
+// Per-slot topics for the editable "Page N" text entities.
+func (b *Bridge) slotCmdTopic(i int) string {
+	return fmt.Sprintf("ha-dashboard/%s/page/slot/%d/set", b.cfg.NodeID, i)
+}
+func (b *Bridge) slotStateTopic(i int) string {
+	return fmt.Sprintf("ha-dashboard/%s/page/slot/%d", b.cfg.NodeID, i)
+}
+func (b *Bridge) slotDiscovery(i int) string {
+	return fmt.Sprintf("%s/text/%s/page_slot_%d/config", b.cfg.DiscoveryPrefix, b.cfg.NodeID, i)
+}
+
+// publishPageDiscovery (re)announces the page entities. The editable "Page N"
+// text slots are always present (you edit the list through them, even from
+// empty). The navigation select + Next/Prev are only announced when there's at
+// least one page — HA requires a select to have options, and cycling nothing is
+// pointless — and cleared otherwise.
 func (b *Bridge) publishPageDiscovery(client mqtt.Client) {
+	// Editable slots (config category): "Page 1".."Page N", each "Name | URL".
+	for i := 0; i < pageSlots; i++ {
+		slot, _ := json.Marshal(map[string]any{
+			"name":               fmt.Sprintf("Page %d", i+1),
+			"unique_id":          fmt.Sprintf("%s_page_slot_%d", b.cfg.NodeID, i),
+			"command_topic":      b.slotCmdTopic(i),
+			"state_topic":        b.slotStateTopic(i),
+			"max":                255,
+			"entity_category":    "config",
+			"availability_topic": b.statusTopic,
+			"icon":               "mdi:link-variant",
+			"device":             b.device(),
+		})
+		b.publish(client, b.slotDiscovery(i), slot, true)
+	}
+
 	labels := b.pages.Labels()
 	if len(labels) == 0 {
 		b.publish(client, b.pageSelectDiscovery, nil, true)
@@ -540,8 +576,14 @@ func (b *Bridge) publishPageDiscovery(client mqtt.Client) {
 	b.publish(client, b.pagePrevDiscovery, button("page_prev", "Previous page", "mdi:arrow-left-bold", b.pagePrevCmdTopic), true)
 }
 
-func (b *Bridge) publishPageState(client mqtt.Client) {
+// publishPages publishes the current-page state and every slot's value. Used on
+// connect and whenever the list changes, so HA's select and "Page N" editors
+// both reflect reality (including compaction after an edit).
+func (b *Bridge) publishPages(client mqtt.Client) {
 	b.publish(client, b.pageSelectStateTopic, []byte(b.pages.CurrentLabel()), true)
+	for i := 0; i < pageSlots; i++ {
+		b.publish(client, b.slotStateTopic(i), []byte(b.pages.Slot(i)), true)
+	}
 }
 
 func (b *Bridge) onSelectPage(_ mqtt.Client, msg mqtt.Message) {
@@ -550,6 +592,19 @@ func (b *Bridge) onSelectPage(_ mqtt.Client, msg mqtt.Message) {
 
 func (b *Bridge) onNextPage(_ mqtt.Client, _ mqtt.Message) { b.pages.Next() }
 func (b *Bridge) onPrevPage(_ mqtt.Client, _ mqtt.Message) { b.pages.Prev() }
+
+// onSlot handles an edit from a "Page N" text entity: apply it, then re-announce
+// (options changed) and republish all slots + the current page so HA reflects
+// the compacted result.
+func (b *Bridge) onSlot(i int) mqtt.MessageHandler {
+	return func(client mqtt.Client, msg mqtt.Message) {
+		if err := b.pages.SetSlot(i, string(msg.Payload())); err != nil {
+			log.Printf("mqtt: set page slot %d: %v", i, err)
+		}
+		b.publishPageDiscovery(client)
+		b.publishPages(client)
+	}
+}
 
 // publishActivity publishes the seconds-since-last-touch. Not retained: it's a
 // live measurement that's always changing, so a retained stale value is noise.

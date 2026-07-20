@@ -4,9 +4,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"syscall"
 )
+
+// pageSlots is how many editable "Page N" text entities we expose to HA for
+// editing the list (each holds "Name | URL"). A fixed count because MQTT
+// discovery entities are static; bump it for more capacity.
+const pageSlots = 8
 
 // Page is one entry in the pushable URL list exposed to Home Assistant as a
 // select option. Name is the friendly label; URL is what the kiosk navigates to.
@@ -83,6 +89,53 @@ func (p *Pages) CurrentLabel() string {
 		return ""
 	}
 	return p.list[p.index].Label()
+}
+
+// Slot renders slot i for the HA text editor: "Name | URL" (or just the URL
+// when unnamed), or "" for a slot past the end of the list.
+func (p *Pages) Slot(i int) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if i < 0 || i >= len(p.list) {
+		return ""
+	}
+	pg := p.list[i]
+	if pg.Name != "" {
+		return pg.Name + " | " + pg.URL
+	}
+	return pg.URL
+}
+
+// SetSlot applies an edit from the HA "Page N" text entity. The value is
+// "Name | URL" (name optional; a bare string is the URL). An empty/URL-less
+// value clears that slot and compacts the list; otherwise the slot is replaced,
+// or appended when it's the first empty slot past the end.
+func (p *Pages) SetSlot(i int, value string) error {
+	name, url := parseSlot(value)
+
+	p.mu.Lock()
+	list := append([]Page(nil), p.list...)
+	p.mu.Unlock()
+
+	switch {
+	case url == "":
+		if i >= 0 && i < len(list) {
+			list = append(list[:i], list[i+1:]...) // remove + compact
+		}
+	case i >= 0 && i < len(list):
+		list[i] = Page{Name: name, URL: url}
+	default:
+		list = append(list, Page{Name: name, URL: url}) // append at the end
+	}
+	return p.SetList(list)
+}
+
+// parseSlot splits "Name | URL" into its parts; a bare value is the URL.
+func parseSlot(v string) (name, url string) {
+	if before, after, ok := strings.Cut(strings.TrimSpace(v), "|"); ok {
+		return strings.TrimSpace(before), strings.TrimSpace(after)
+	}
+	return "", strings.TrimSpace(v)
 }
 
 // SetList replaces and persists the configured pages, clamps the index, and
