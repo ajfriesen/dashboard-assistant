@@ -37,7 +37,7 @@ in
   options.dashboard.update = {
     repo = lib.mkOption {
       type = lib.types.str;
-      default = "ajfriesen/ha-dashboard-os";
+      default = "ajfriesen/dashboard-assistant";
       description = ''
         owner/repo whose newest release advertises the latest available version.
         The daemon polls <apiBase>/repos/<repo>/releases/latest.

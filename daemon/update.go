@@ -18,7 +18,7 @@ import (
 // mirror or a self-hosted Gitea instead — both expose the same
 // <apiBase>/repos/<repo>/releases/latest shape.
 const (
-	defaultUpdateRepo     = "ajfriesen/ha-dashboard-os"
+	defaultUpdateRepo     = "ajfriesen/dashboard-assistant"
 	defaultUpdateAPIBase  = "https://api.github.com"
 	defaultUpdateInterval = time.Hour
 	releaseSummaryMax     = 1000 // cap the retained release-notes payload
