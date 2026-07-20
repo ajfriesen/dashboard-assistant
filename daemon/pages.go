@@ -9,11 +9,6 @@ import (
 	"syscall"
 )
 
-// pageSlots is how many editable "Page N" text entities we expose to HA for
-// editing the list (each holds "Name | URL"). A fixed count because MQTT
-// discovery entities are static; bump it for more capacity.
-const pageSlots = 8
-
 // Page is one entry in the pushable URL list exposed to Home Assistant as a
 // select option. Name is the friendly label; URL is what the kiosk navigates to.
 type Page struct {
@@ -91,47 +86,48 @@ func (p *Pages) CurrentLabel() string {
 	return p.list[p.index].Label()
 }
 
-// Slot renders slot i for the HA text editor: "Name | URL" (or just the URL
-// when unnamed), or "" for a slot past the end of the list.
-func (p *Pages) Slot(i int) string {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if i < 0 || i >= len(p.list) {
-		return ""
+// AddOrUpdate appends a page, or updates an existing one it matches (by name if
+// named, else by URL) — so the HA "Add / update page" text covers both add and
+// edit. An empty URL is ignored. Scales to any list size (one text entity).
+func (p *Pages) AddOrUpdate(name, url string) error {
+	if url == "" {
+		return nil
 	}
-	pg := p.list[i]
-	if pg.Name != "" {
-		return pg.Name + " | " + pg.URL
-	}
-	return pg.URL
-}
-
-// SetSlot applies an edit from the HA "Page N" text entity. The value is
-// "Name | URL" (name optional; a bare string is the URL). An empty/URL-less
-// value clears that slot and compacts the list; otherwise the slot is replaced,
-// or appended when it's the first empty slot past the end.
-func (p *Pages) SetSlot(i int, value string) error {
-	name, url := parseSlot(value)
-
 	p.mu.Lock()
 	list := append([]Page(nil), p.list...)
 	p.mu.Unlock()
 
-	switch {
-	case url == "":
-		if i >= 0 && i < len(list) {
-			list = append(list[:i], list[i+1:]...) // remove + compact
+	idx := -1
+	for i, pg := range list {
+		if (name != "" && pg.Name == name) || (name == "" && pg.URL == url) {
+			idx = i
+			break
 		}
-	case i >= 0 && i < len(list):
-		list[i] = Page{Name: name, URL: url}
-	default:
-		list = append(list, Page{Name: name, URL: url}) // append at the end
+	}
+	if idx >= 0 {
+		list[idx] = Page{Name: name, URL: url}
+	} else {
+		list = append(list, Page{Name: name, URL: url})
 	}
 	return p.SetList(list)
 }
 
-// parseSlot splits "Name | URL" into its parts; a bare value is the URL.
-func parseSlot(v string) (name, url string) {
+// RemoveCurrent drops the page at the current index (what the HA select shows),
+// backing the "Remove selected page" button. No-op on an empty list.
+func (p *Pages) RemoveCurrent() error {
+	p.mu.Lock()
+	list := append([]Page(nil), p.list...)
+	i := p.index
+	p.mu.Unlock()
+	if i < 0 || i >= len(list) {
+		return nil
+	}
+	list = append(list[:i], list[i+1:]...)
+	return p.SetList(list)
+}
+
+// parseInput splits "Name | URL" into its parts; a bare value is the URL.
+func parseInput(v string) (name, url string) {
 	if before, after, ok := strings.Cut(strings.TrimSpace(v), "|"); ok {
 		return strings.TrimSpace(before), strings.TrimSpace(after)
 	}

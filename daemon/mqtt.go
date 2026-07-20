@@ -133,6 +133,12 @@ type Bridge struct {
 	pageSelectDiscovery  string
 	pageNextDiscovery    string
 	pagePrevDiscovery    string
+	// Editing (scales to any list size): a text to add/update + a remove button.
+	pageAddCmdTopic     string
+	pageAddStateTopic   string
+	pageAddDiscovery    string
+	pageRemoveCmdTopic  string
+	pageRemoveDiscovery string
 
 	// "Seconds since last touch" sensor.
 	touchStateTopic string
@@ -187,6 +193,11 @@ func newBridge(cfg MQTTConfig, disp *Display, pages *Pages, act *Activity) *Brid
 		pageSelectDiscovery:  disco("select", "page"),
 		pageNextDiscovery:    disco("button", "page_next"),
 		pagePrevDiscovery:    disco("button", "page_prev"),
+		pageAddCmdTopic:      base + "/page/add/set",
+		pageAddStateTopic:    base + "/page/add",
+		pageAddDiscovery:     disco("text", "page_add"),
+		pageRemoveCmdTopic:   base + "/page/remove/set",
+		pageRemoveDiscovery:  disco("button", "page_remove"),
 
 		touchStateTopic: base + "/touch/seconds",
 		touchDiscovery:  disco("sensor", "last_touch"),
@@ -483,13 +494,8 @@ func (b *Bridge) onConnect(client mqtt.Client) {
 		{b.pageSelectCmdTopic, b.onSelectPage},
 		{b.pageNextCmdTopic, b.onNextPage},
 		{b.pagePrevCmdTopic, b.onPrevPage},
-	}
-	// Editable "Page N" text slots.
-	for i := 0; i < pageSlots; i++ {
-		subs = append(subs, struct {
-			topic string
-			h     mqtt.MessageHandler
-		}{b.slotCmdTopic(i), b.onSlot(i)})
+		{b.pageAddCmdTopic, b.onAddPage},
+		{b.pageRemoveCmdTopic, b.onRemovePage},
 	}
 	for _, s := range subs {
 		if tok := client.Subscribe(s.topic, 1, s.h); tok.Wait() && tok.Error() != nil {
@@ -509,38 +515,36 @@ func (b *Bridge) device() map[string]any {
 	}
 }
 
-// Per-slot topics for the editable "Page N" text entities.
-func (b *Bridge) slotCmdTopic(i int) string {
-	return fmt.Sprintf("ha-dashboard/%s/page/slot/%d/set", b.cfg.NodeID, i)
-}
-func (b *Bridge) slotStateTopic(i int) string {
-	return fmt.Sprintf("ha-dashboard/%s/page/slot/%d", b.cfg.NodeID, i)
-}
-func (b *Bridge) slotDiscovery(i int) string {
-	return fmt.Sprintf("%s/text/%s/page_slot_%d/config", b.cfg.DiscoveryPrefix, b.cfg.NodeID, i)
-}
-
-// publishPageDiscovery (re)announces the page entities. The editable "Page N"
-// text slots are always present (you edit the list through them, even from
-// empty). The navigation select + Next/Prev are only announced when there's at
+// publishPageDiscovery (re)announces the page entities. The editing controls — an
+// "Add / update page" text and a "Remove selected page" button — are always
+// present (a fixed pair regardless of list size, so it scales to any number of
+// pages). The navigation select + Next/Prev are only announced when there's at
 // least one page — HA requires a select to have options, and cycling nothing is
 // pointless — and cleared otherwise.
 func (b *Bridge) publishPageDiscovery(client mqtt.Client) {
-	// Editable slots (config category): "Page 1".."Page N", each "Name | URL".
-	for i := 0; i < pageSlots; i++ {
-		slot, _ := json.Marshal(map[string]any{
-			"name":               fmt.Sprintf("Page %d", i+1),
-			"unique_id":          fmt.Sprintf("%s_page_slot_%d", b.cfg.NodeID, i),
-			"command_topic":      b.slotCmdTopic(i),
-			"state_topic":        b.slotStateTopic(i),
-			"max":                255,
-			"entity_category":    "config",
-			"availability_topic": b.statusTopic,
-			"icon":               "mdi:link-variant",
-			"device":             b.device(),
-		})
-		b.publish(client, b.slotDiscovery(i), slot, true)
-	}
+	addText, _ := json.Marshal(map[string]any{
+		"name":               "Add / update page",
+		"unique_id":          b.cfg.NodeID + "_page_add",
+		"command_topic":      b.pageAddCmdTopic,
+		"state_topic":        b.pageAddStateTopic,
+		"max":                255,
+		"entity_category":    "config",
+		"availability_topic": b.statusTopic,
+		"icon":               "mdi:link-plus",
+		"device":             b.device(),
+	})
+	b.publish(client, b.pageAddDiscovery, addText, true)
+
+	removeBtn, _ := json.Marshal(map[string]any{
+		"name":               "Remove selected page",
+		"unique_id":          b.cfg.NodeID + "_page_remove",
+		"command_topic":      b.pageRemoveCmdTopic,
+		"entity_category":    "config",
+		"availability_topic": b.statusTopic,
+		"icon":               "mdi:link-off",
+		"device":             b.device(),
+	})
+	b.publish(client, b.pageRemoveDiscovery, removeBtn, true)
 
 	labels := b.pages.Labels()
 	if len(labels) == 0 {
@@ -576,14 +580,11 @@ func (b *Bridge) publishPageDiscovery(client mqtt.Client) {
 	b.publish(client, b.pagePrevDiscovery, button("page_prev", "Previous page", "mdi:arrow-left-bold", b.pagePrevCmdTopic), true)
 }
 
-// publishPages publishes the current-page state and every slot's value. Used on
-// connect and whenever the list changes, so HA's select and "Page N" editors
-// both reflect reality (including compaction after an edit).
+// publishPages publishes the current-page state and clears the add-page input.
+// Used on connect and whenever the list changes.
 func (b *Bridge) publishPages(client mqtt.Client) {
 	b.publish(client, b.pageSelectStateTopic, []byte(b.pages.CurrentLabel()), true)
-	for i := 0; i < pageSlots; i++ {
-		b.publish(client, b.slotStateTopic(i), []byte(b.pages.Slot(i)), true)
-	}
+	b.publish(client, b.pageAddStateTopic, []byte(""), true) // keep the input field cleared
 }
 
 func (b *Bridge) onSelectPage(_ mqtt.Client, msg mqtt.Message) {
@@ -593,17 +594,24 @@ func (b *Bridge) onSelectPage(_ mqtt.Client, msg mqtt.Message) {
 func (b *Bridge) onNextPage(_ mqtt.Client, _ mqtt.Message) { b.pages.Next() }
 func (b *Bridge) onPrevPage(_ mqtt.Client, _ mqtt.Message) { b.pages.Prev() }
 
-// onSlot handles an edit from a "Page N" text entity: apply it, then re-announce
-// (options changed) and republish all slots + the current page so HA reflects
-// the compacted result.
-func (b *Bridge) onSlot(i int) mqtt.MessageHandler {
-	return func(client mqtt.Client, msg mqtt.Message) {
-		if err := b.pages.SetSlot(i, string(msg.Payload())); err != nil {
-			log.Printf("mqtt: set page slot %d: %v", i, err)
-		}
-		b.publishPageDiscovery(client)
-		b.publishPages(client)
+// onAddPage handles the "Add / update page" text ("Name | URL"): append or
+// update-by-name, then re-announce (select options changed) and republish.
+func (b *Bridge) onAddPage(client mqtt.Client, msg mqtt.Message) {
+	name, url := parseInput(string(msg.Payload()))
+	if err := b.pages.AddOrUpdate(name, url); err != nil {
+		log.Printf("mqtt: add page: %v", err)
 	}
+	b.publishPageDiscovery(client)
+	b.publishPages(client)
+}
+
+// onRemovePage drops the currently-selected page.
+func (b *Bridge) onRemovePage(client mqtt.Client, _ mqtt.Message) {
+	if err := b.pages.RemoveCurrent(); err != nil {
+		log.Printf("mqtt: remove page: %v", err)
+	}
+	b.publishPageDiscovery(client)
+	b.publishPages(client)
 }
 
 // publishActivity publishes the seconds-since-last-touch. Not retained: it's a
