@@ -86,6 +86,16 @@ func (p *Pages) CurrentLabel() string {
 	return p.list[p.index].Label()
 }
 
+// Index is the current page index (0-based, -1 when the list is empty).
+func (p *Pages) Index() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.list) == 0 {
+		return -1
+	}
+	return p.index
+}
+
 // AddOrUpdate appends a page, or updates an existing one it matches (by name if
 // named, else by URL) — so the HA "Add / update page" text covers both add and
 // edit. An empty URL is ignored. Scales to any list size (one text entity).

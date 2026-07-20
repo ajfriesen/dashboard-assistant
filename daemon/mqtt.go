@@ -139,6 +139,11 @@ type Bridge struct {
 	pageAddDiscovery    string
 	pageRemoveCmdTopic  string
 	pageRemoveDiscovery string
+	// "Pages" sensor: count as state, the full list (name/url/index) as attributes
+	// — a visible list in HA and a lookup source for automations.
+	pagesCountTopic string
+	pagesAttrTopic  string
+	pagesDiscovery  string
 
 	// "Seconds since last touch" sensor.
 	touchStateTopic string
@@ -198,6 +203,9 @@ func newBridge(cfg MQTTConfig, disp *Display, pages *Pages, act *Activity) *Brid
 		pageAddDiscovery:     disco("text", "page_add"),
 		pageRemoveCmdTopic:   base + "/page/remove/set",
 		pageRemoveDiscovery:  disco("button", "page_remove"),
+		pagesCountTopic:      base + "/pages/count",
+		pagesAttrTopic:       base + "/pages/attributes",
+		pagesDiscovery:       disco("sensor", "pages"),
 
 		touchStateTopic: base + "/touch/seconds",
 		touchDiscovery:  disco("sensor", "last_touch"),
@@ -546,6 +554,20 @@ func (b *Bridge) publishPageDiscovery(client mqtt.Client) {
 	})
 	b.publish(client, b.pageRemoveDiscovery, removeBtn, true)
 
+	// "Pages" sensor: state = page count, attributes = the full list. Lets you
+	// see the configured pages and look them up in automations.
+	pagesSensor, _ := json.Marshal(map[string]any{
+		"name":                  "Pages",
+		"unique_id":             b.cfg.NodeID + "_pages",
+		"state_topic":           b.pagesCountTopic,
+		"unit_of_measurement":   "pages",
+		"json_attributes_topic": b.pagesAttrTopic,
+		"icon":                  "mdi:format-list-bulleted",
+		"availability_topic":    b.statusTopic,
+		"device":                b.device(),
+	})
+	b.publish(client, b.pagesDiscovery, pagesSensor, true)
+
 	labels := b.pages.Labels()
 	if len(labels) == 0 {
 		b.publish(client, b.pageSelectDiscovery, nil, true)
@@ -580,11 +602,31 @@ func (b *Bridge) publishPageDiscovery(client mqtt.Client) {
 	b.publish(client, b.pagePrevDiscovery, button("page_prev", "Previous page", "mdi:arrow-left-bold", b.pagePrevCmdTopic), true)
 }
 
-// publishPages publishes the current-page state and clears the add-page input.
-// Used on connect and whenever the list changes.
+// publishPages publishes the current-page state, the "Pages" list sensor, and
+// clears the add-page input. Used on connect and whenever the list changes.
 func (b *Bridge) publishPages(client mqtt.Client) {
 	b.publish(client, b.pageSelectStateTopic, []byte(b.pages.CurrentLabel()), true)
 	b.publish(client, b.pageAddStateTopic, []byte(""), true) // keep the input field cleared
+
+	// Pages sensor: count + the full list as attributes.
+	list := b.pages.List()
+	b.publish(client, b.pagesCountTopic, []byte(strconv.Itoa(len(list))), true)
+	type item struct {
+		Index int    `json:"index"`
+		Name  string `json:"name"`
+		URL   string `json:"url"`
+		Label string `json:"label"`
+	}
+	items := make([]item, len(list))
+	for i, p := range list {
+		items[i] = item{i, p.Name, p.URL, p.Label()}
+	}
+	attrs, _ := json.Marshal(map[string]any{
+		"pages":         items,
+		"current":       b.pages.CurrentLabel(),
+		"current_index": b.pages.Index(),
+	})
+	b.publish(client, b.pagesAttrTopic, attrs, true)
 }
 
 func (b *Bridge) onSelectPage(_ mqtt.Client, msg mqtt.Message) {
