@@ -73,6 +73,28 @@ func TestCheckerFetchAndState(t *testing.T) {
 	}
 }
 
+func TestInstallTarget(t *testing.T) {
+	u := &UpdateChecker{installed: "1.4.0"}
+
+	// No release fetched yet → nothing to install.
+	if ref, ok := u.InstallTarget(); ok {
+		t.Fatalf("InstallTarget before check = (%q, true), want no target", ref)
+	}
+
+	// A newer release → the raw tag is the target.
+	u.latest = Release{TagName: "v1.5.0"}
+	u.haveLatest = true
+	if ref, ok := u.InstallTarget(); !ok || ref != "v1.5.0" {
+		t.Fatalf("InstallTarget = (%q, %v), want (\"v1.5.0\", true)", ref, ok)
+	}
+
+	// Latest equals installed (after normalising the tag) → nothing to install.
+	u.latest = Release{TagName: "v1.4.0"}
+	if ref, ok := u.InstallTarget(); ok {
+		t.Fatalf("InstallTarget when up to date = (%q, true), want no target", ref)
+	}
+}
+
 func TestCheckerNoReleases(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r) // GitHub/Gitea return 404 when there are no releases

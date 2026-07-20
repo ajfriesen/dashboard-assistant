@@ -51,39 +51,48 @@ type Release struct {
 // Latest is normalised (leading "v" stripped) so it compares cleanly with the
 // installed version.
 type UpdateState struct {
-	Installed string
-	Latest    string
-	URL       string
-	Summary   string
-	Title     string
+	Installed  string
+	Latest     string
+	URL        string
+	Summary    string
+	Title      string
+	InProgress bool
 }
 
 // UpdateChecker polls the release source for the newest version and holds the
 // result for the MQTT bridge to publish. It mirrors the Display/Activity
 // observer pattern: on a change it fires the observer so the bridge republishes.
 type UpdateChecker struct {
-	installed string
-	repo      string
-	apiBase   string
-	interval  time.Duration
-	client    *http.Client
+	repo        string
+	apiBase     string
+	interval    time.Duration
+	installable bool // whether HA gets an Install button (a privileged unit exists)
+	client      *http.Client
 
 	mu         sync.Mutex
+	installed  string
 	latest     Release
 	haveLatest bool
+	installing bool // an update is currently being applied
 
 	observer func()
 }
 
 func NewUpdateChecker() *UpdateChecker {
 	return &UpdateChecker{
-		installed: installedVersion(),
-		repo:      envOr("UPDATE_REPO", defaultUpdateRepo),
-		apiBase:   strings.TrimRight(envOr("UPDATE_API_BASE", defaultUpdateAPIBase), "/"),
-		interval:  updateInterval(),
-		client:    &http.Client{Timeout: 15 * time.Second},
+		installed:   installedVersion(),
+		repo:        envOr("UPDATE_REPO", defaultUpdateRepo),
+		apiBase:     strings.TrimRight(envOr("UPDATE_API_BASE", defaultUpdateAPIBase), "/"),
+		interval:    updateInterval(),
+		installable: os.Getenv("UPDATE_INSTALLABLE") == "1",
+		client:      &http.Client{Timeout: 15 * time.Second},
 	}
 }
+
+// Installable reports whether this image can apply updates in place (a
+// privileged ha-update@ unit is present). The bridge only offers HA an Install
+// button when true.
+func (u *UpdateChecker) Installable() bool { return u.installable }
 
 // updateInterval reads UPDATE_CHECK_INTERVAL (a Go duration, e.g. "30m") or
 // falls back to the hourly default.
@@ -166,7 +175,7 @@ func (u *UpdateChecker) State() UpdateState {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 
-	st := UpdateState{Installed: u.installed, Latest: u.installed}
+	st := UpdateState{Installed: u.installed, Latest: u.installed, InProgress: u.installing}
 	if u.haveLatest {
 		st.Latest = normalizeVersion(u.latest.TagName)
 		st.URL = u.latest.HTMLURL
@@ -174,6 +183,38 @@ func (u *UpdateChecker) State() UpdateState {
 		st.Summary = summarise(u.latest.Body)
 	}
 	return st
+}
+
+// InstallTarget returns the raw release tag to update to (e.g. "v1.5.0"), and
+// whether an update is actually available — false when no release has been
+// fetched or the newest one matches the installed version.
+func (u *UpdateChecker) InstallTarget() (string, bool) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if !u.haveLatest {
+		return "", false
+	}
+	if normalizeVersion(u.latest.TagName) == u.installed {
+		return "", false
+	}
+	return strings.TrimSpace(u.latest.TagName), true
+}
+
+// SetInstalling marks an update as in progress (or done), for the HA entity's
+// in_progress flag.
+func (u *UpdateChecker) SetInstalling(v bool) {
+	u.mu.Lock()
+	u.installing = v
+	u.mu.Unlock()
+}
+
+// RefreshInstalled re-reads the baked-in version file. Called after a successful
+// switch that didn't restart the daemon, so "installed" reflects the new system.
+func (u *UpdateChecker) RefreshInstalled() {
+	v := installedVersion()
+	u.mu.Lock()
+	u.installed = v
+	u.mu.Unlock()
 }
 
 // normalizeVersion strips a leading "v" from a release tag ("v1.5.0" → "1.5.0")

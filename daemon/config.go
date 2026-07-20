@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/godbus/dbus/v5"
@@ -172,6 +173,70 @@ func bootGeneration(n int) error {
 	if err != nil {
 		return fmt.Errorf("StartUnit %s: %w", unit, err)
 	}
+	return nil
+}
+
+// refPattern bounds the release tag we interpolate into the ha-update@ instance
+// name (and, in the unit's script, into the flake ref). Tags are validated here
+// and re-validated by the script.
+var refPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// startUpdate applies an OS update to release ref (a git tag) by starting the
+// templated, root-run ha-update@<ref>.service, which does the flake
+// `nixos-rebuild switch`. A scoped polkit rule grants ha-dashboard rights to
+// start just these units.
+//
+// It watches the start job over D-Bus and calls onDone with the job result once
+// the rebuild finishes ("done" on success, e.g. "failed" otherwise). A
+// successful switch usually restarts the daemon, so onDone may never fire — the
+// fresh process republishes clean state instead; that's expected.
+func startUpdate(ref string, onDone func(result string)) error {
+	if !refPattern.MatchString(ref) {
+		return fmt.Errorf("invalid ref: %q", ref)
+	}
+	conn, err := dbus.ConnectSystemBus()
+	if err != nil {
+		return fmt.Errorf("connect system bus: %w", err)
+	}
+
+	systemd := conn.Object("org.freedesktop.systemd1", "/org/freedesktop/systemd1")
+	// systemd only emits job/unit signals to clients that have subscribed.
+	if call := systemd.Call("org.freedesktop.systemd1.Manager.Subscribe", 0); call.Err != nil {
+		conn.Close()
+		return fmt.Errorf("subscribe: %w", call.Err)
+	}
+	if err := conn.AddMatchSignal(
+		dbus.WithMatchInterface("org.freedesktop.systemd1.Manager"),
+		dbus.WithMatchMember("JobRemoved"),
+	); err != nil {
+		conn.Close()
+		return fmt.Errorf("add match: %w", err)
+	}
+	ch := make(chan *dbus.Signal, 16)
+	conn.Signal(ch)
+
+	unit := fmt.Sprintf("ha-update@%s.service", ref)
+	var job dbus.ObjectPath
+	if err := systemd.Call("org.freedesktop.systemd1.Manager.StartUnit", 0, unit, "replace").Store(&job); err != nil {
+		conn.Close()
+		return fmt.Errorf("StartUnit %s: %w", unit, err)
+	}
+
+	go func() {
+		defer conn.Close()
+		// JobRemoved signature: (u id, o job, s unit, s result).
+		for sig := range ch {
+			if sig.Name != "org.freedesktop.systemd1.Manager.JobRemoved" || len(sig.Body) < 4 {
+				continue
+			}
+			if jobPath, _ := sig.Body[1].(dbus.ObjectPath); jobPath != job {
+				continue
+			}
+			result, _ := sig.Body[3].(string)
+			onDone(result)
+			return
+		}
+	}()
 	return nil
 }
 

@@ -155,8 +155,10 @@ type Bridge struct {
 	genCountTopic     string
 	genCountDiscovery string
 
-	// System update: installed vs latest release (read-only for now).
+	// System update: installed vs latest release, plus the Install command
+	// (subscribed only when the image can apply updates).
 	updateStateTopic string
+	updateCmdTopic   string
 	updateDiscovery  string
 
 	// Device info / diagnostics.
@@ -211,6 +213,7 @@ func newBridge(cfg MQTTConfig, disp *Display, pages *Pages, act *Activity, upd *
 		genCountDiscovery: disco("sensor", "generations"),
 
 		updateStateTopic: base + "/update/state",
+		updateCmdTopic:   base + "/update/install",
 		updateDiscovery:  disco("update", "update"),
 
 		hostnameTopic: base + "/host/hostname", hostnameDiscovery: disco("sensor", "hostname"),
@@ -442,11 +445,12 @@ func (b *Bridge) onConnect(client mqtt.Client) {
 	})
 	b.publish(client, b.genCountDiscovery, gens, true)
 
-	// System update entity: installed vs latest release. Read-only for now — no
-	// command_topic, so HA shows "update available" without an Install button.
-	// The JSON state payload uses HA's native update keys (installed_version,
-	// latest_version, release_url, …), so no value templates are needed.
-	update, _ := json.Marshal(map[string]any{
+	// System update entity: installed vs latest release. The JSON state payload
+	// uses HA's native update keys (installed_version, latest_version,
+	// release_url, in_progress, …), so no value templates are needed. The Install
+	// button (command_topic) is offered only when the image can actually apply
+	// updates — otherwise the entity is display-only.
+	updateCfg := map[string]any{
 		"name":               "System update",
 		"unique_id":          b.cfg.NodeID + "_update",
 		"state_topic":        b.updateStateTopic,
@@ -454,7 +458,12 @@ func (b *Bridge) onConnect(client mqtt.Client) {
 		"availability_topic": b.statusTopic,
 		"icon":               "mdi:package-up",
 		"device":             b.device(),
-	})
+	}
+	if b.upd.Installable() {
+		updateCfg["command_topic"] = b.updateCmdTopic
+		updateCfg["payload_install"] = "INSTALL"
+	}
+	update, _ := json.Marshal(updateCfg)
 	b.publish(client, b.updateDiscovery, update, true)
 
 	// Device info sensors. Regular sensors, except uptime, which stays in HA's
@@ -513,6 +522,12 @@ func (b *Bridge) onConnect(client mqtt.Client) {
 		{b.pageSelectCmdTopic, b.onSelectPage},
 		{b.pageNextCmdTopic, b.onNextPage},
 		{b.pagePrevCmdTopic, b.onPrevPage},
+	}
+	if b.upd.Installable() {
+		subs = append(subs, struct {
+			topic string
+			h     mqtt.MessageHandler
+		}{b.updateCmdTopic, b.onInstall})
 	}
 	// Editable "Page N" text slots.
 	for i := 0; i < pageSlots; i++ {
@@ -686,6 +701,7 @@ func (b *Bridge) publishUpdate(client mqtt.Client) {
 	payload := map[string]any{
 		"installed_version": st.Installed,
 		"latest_version":    st.Latest,
+		"in_progress":       st.InProgress,
 	}
 	if st.URL != "" {
 		payload["release_url"] = st.URL
@@ -698,6 +714,40 @@ func (b *Bridge) publishUpdate(client mqtt.Client) {
 	}
 	p, _ := json.Marshal(payload)
 	b.publish(client, b.updateStateTopic, p, true)
+}
+
+// onInstall applies the latest release when HA's Install button is pressed. It
+// marks the entity in-progress, starts the privileged ha-update@ unit, and
+// clears/refreshes state from the job result. A successful switch usually
+// restarts the daemon, so the fresh process republishes clean state instead.
+func (b *Bridge) onInstall(client mqtt.Client, _ mqtt.Message) {
+	tag, ok := b.upd.InstallTarget()
+	if !ok {
+		log.Printf("mqtt: install requested but no newer release is available")
+		b.publishUpdate(client) // reassert current state (clears HA's optimistic spinner)
+		return
+	}
+
+	b.upd.SetInstalling(true)
+	b.publishUpdate(client)
+	log.Printf("mqtt: installing update %s", tag)
+
+	err := startUpdate(tag, func(result string) {
+		b.upd.SetInstalling(false)
+		if result == "done" {
+			// Switch may not have restarted us (e.g. only config changed) — re-read
+			// the baked-in version so "installed" reflects the new system.
+			b.upd.RefreshInstalled()
+		} else {
+			log.Printf("mqtt: update %s did not complete: %s", tag, result)
+		}
+		b.ifConnected(b.publishUpdate)
+	})
+	if err != nil {
+		log.Printf("mqtt: start update %s: %v", tag, err)
+		b.upd.SetInstalling(false)
+		b.publishUpdate(client)
+	}
 }
 
 // publishHostDynamic publishes the changing device diagnostics: IP, uptime, and

@@ -14,6 +14,11 @@
 
   nixpkgs.hostPlatform = "aarch64-linux";
 
+  # In-place updates: rebuild this config from the release tag. No systemd-boot
+  # auto-rollback here (extlinux), but manual rollback from the recovery UI works.
+  dashboard.update.installable = true;
+  dashboard.update.flakeAttr = "dashboard-rpi4";
+
   # sd-image-aarch64 pulls in the generic "all-hardware" initrd module list
   # (dw-hdmi, analogix, …), but the downstream linux-rpi kernel builds SD/USB/
   # ext4 straight into the kernel and doesn't ship many of those modules — so the

@@ -11,13 +11,17 @@
   # with "kernel-modules has no target attribute". Re-attach it (bzImage on
   # x86_64) in the pkgs instance disko uses for image building only. Drop this
   # once disko upstream tracks the vmTools change.
-  disko.imageBuilder.pkgs = pkgs.extend (final: prev: {
-    aggregateModules = modules: (prev.aggregateModules modules).overrideAttrs (old: {
-      passthru = (old.passthru or { }) // {
-        target = "bzImage"; # x86_64 kernel image name (this target is x86_64-only)
-      };
-    });
-  });
+  disko.imageBuilder.pkgs = pkgs.extend (
+    final: prev: {
+      aggregateModules =
+        modules:
+        (prev.aggregateModules modules).overrideAttrs (old: {
+          passthru = (old.passthru or { }) // {
+            target = "bzImage"; # x86_64 kernel image name (this target is x86_64-only)
+          };
+        });
+    }
+  );
 
   imports = [
     # btrfs+zstd disk layout (disko). Provides fileSystems."/" and "/boot".
@@ -29,6 +33,11 @@
 
   nixpkgs.hostPlatform = "x86_64-linux";
   hardware.enableRedistributableFirmware = true;
+
+  # In-place updates: build this config's toplevel from the release tag. The
+  # boot-assessment auto-rollback below covers an update that won't come up.
+  dashboard.update.installable = true;
+  dashboard.update.flakeAttr = "dashboard-x86-disk";
 
   # Grow the root partition to fill the actual disk in early boot. Paired with
   # x-systemd.growfs on / (disk-layout.nix), a small 4G image expands to use the
