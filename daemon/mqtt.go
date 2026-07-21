@@ -186,6 +186,11 @@ type Bridge struct {
 	modelTopic, modelDiscovery       string
 	cpuTopic, cpuDiscovery           string
 	serialTopic, serialDiscovery     string
+
+	// Battery (only announced when a battery is present) + temperature.
+	battTopic, battDiscovery                 string
+	battChargingTopic, battChargingDiscovery string
+	tempTopic, tempDiscovery                 string
 }
 
 func newBridge(cfg MQTTConfig, disp *Display, pages *Pages, act *Activity, upd *UpdateChecker, zoom *Zoom, theme *Theme) *Bridge {
@@ -255,6 +260,10 @@ func newBridge(cfg MQTTConfig, disp *Display, pages *Pages, act *Activity, upd *
 		modelTopic: base + "/host/model", modelDiscovery: disco("sensor", "model"),
 		cpuTopic: base + "/host/cpu", cpuDiscovery: disco("sensor", "cpu"),
 		serialTopic: base + "/host/serial", serialDiscovery: disco("sensor", "serial"),
+
+		battTopic: base + "/battery/level", battDiscovery: disco("sensor", "battery"),
+		battChargingTopic: base + "/battery/charging", battChargingDiscovery: disco("binary_sensor", "battery_charging"),
+		tempTopic: base + "/temperature", tempDiscovery: disco("sensor", "temperature"),
 	}
 }
 
@@ -592,6 +601,50 @@ func (b *Bridge) onConnect(client mqtt.Client) {
 	b.publish(client, b.cpuDiscovery, info("cpu", "CPU usage", b.cpuTopic, "%", "", "mdi:cpu-64-bit", false), true)
 	b.publish(client, b.serialDiscovery, info("serial", "Serial number", b.serialTopic, "", "", "mdi:barcode", false), true)
 
+	// Battery — announced only when the device actually has one (laptops/tablets;
+	// not mini-PCs or VMs). A level sensor (battery device_class draws the dynamic
+	// icon) plus a charging binary_sensor.
+	if _, _, ok := readBattery(); ok {
+		batt, _ := json.Marshal(map[string]any{
+			"name":                "Battery",
+			"unique_id":           b.cfg.NodeID + "_battery",
+			"state_topic":         b.battTopic,
+			"device_class":        "battery",
+			"unit_of_measurement": "%",
+			"state_class":         "measurement",
+			"availability_topic":  b.statusTopic,
+			"device":              b.device(),
+		})
+		b.publish(client, b.battDiscovery, batt, true)
+		charging, _ := json.Marshal(map[string]any{
+			"name":               "Battery charging",
+			"unique_id":          b.cfg.NodeID + "_battery_charging",
+			"state_topic":        b.battChargingTopic,
+			"device_class":       "battery_charging",
+			"payload_on":         "ON",
+			"payload_off":        "OFF",
+			"availability_topic": b.statusTopic,
+			"device":             b.device(),
+		})
+		b.publish(client, b.battChargingDiscovery, charging, true)
+	}
+
+	// Temperature — announced only when a thermal sensor is readable (most boards;
+	// not typically a VM).
+	if _, ok := readTemperature(); ok {
+		temp, _ := json.Marshal(map[string]any{
+			"name":                "Temperature",
+			"unique_id":           b.cfg.NodeID + "_temperature",
+			"state_topic":         b.tempTopic,
+			"device_class":        "temperature",
+			"unit_of_measurement": "°C",
+			"state_class":         "measurement",
+			"availability_topic":  b.statusTopic,
+			"device":              b.device(),
+		})
+		b.publish(client, b.tempDiscovery, temp, true)
+	}
+
 	// Static device info — publish once, retained (changes rarely / never).
 	b.publish(client, b.hostnameTopic, []byte(hostname()), true)
 	b.publish(client, b.modelTopic, []byte(readModel()), true)
@@ -869,8 +922,10 @@ func (b *Bridge) onInstall(client mqtt.Client, _ mqtt.Message) {
 	}
 }
 
-// publishHostDynamic publishes the changing device diagnostics: IP, uptime, and
-// CPU usage. On the telemetry ticker (and once on connect).
+// publishHostDynamic publishes the changing device diagnostics: IP, uptime, CPU
+// usage, and (when present) battery and temperature. On the telemetry ticker
+// (and once on connect). Battery/temperature are skipped when unavailable, so a
+// device without them simply never publishes to those topics.
 func (b *Bridge) publishHostDynamic(client mqtt.Client) {
 	if ip := primaryIP(); ip != "" {
 		b.publish(client, b.ipTopic, []byte(ip), true)
@@ -880,6 +935,17 @@ func (b *Bridge) publishHostDynamic(client mqtt.Client) {
 	}
 	if pct, err := cpu.Usage(); err == nil {
 		b.publish(client, b.cpuTopic, []byte(strconv.Itoa(pct)), false)
+	}
+	if pct, charging, ok := readBattery(); ok {
+		b.publish(client, b.battTopic, []byte(strconv.Itoa(pct)), false)
+		state := "OFF"
+		if charging {
+			state = "ON"
+		}
+		b.publish(client, b.battChargingTopic, []byte(state), false)
+	}
+	if c, ok := readTemperature(); ok {
+		b.publish(client, b.tempTopic, []byte(strconv.FormatFloat(c, 'f', 1, 64)), false)
 	}
 }
 
