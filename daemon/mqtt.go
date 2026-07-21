@@ -117,6 +117,7 @@ type Bridge struct {
 	pages  *Pages
 	act    *Activity
 	upd    *UpdateChecker
+	zoom   *Zoom
 	client mqtt.Client
 
 	statusTopic      string // availability (LWT)
@@ -167,6 +168,11 @@ type Bridge struct {
 	shutdownCmdTopic  string
 	shutdownDiscovery string
 
+	// Browser zoom: a number entity (25..400%).
+	zoomCmdTopic   string
+	zoomStateTopic string
+	zoomDiscovery  string
+
 	// Device info / diagnostics.
 	hostnameTopic, hostnameDiscovery string
 	ipTopic, ipDiscovery             string
@@ -176,7 +182,7 @@ type Bridge struct {
 	serialTopic, serialDiscovery     string
 }
 
-func newBridge(cfg MQTTConfig, disp *Display, pages *Pages, act *Activity, upd *UpdateChecker) *Bridge {
+func newBridge(cfg MQTTConfig, disp *Display, pages *Pages, act *Activity, upd *UpdateChecker, zoom *Zoom) *Bridge {
 	base := "ha-dashboard/" + cfg.NodeID
 	disco := func(kind, obj string) string {
 		return fmt.Sprintf("%s/%s/%s/%s/config", cfg.DiscoveryPrefix, kind, cfg.NodeID, obj)
@@ -187,6 +193,7 @@ func newBridge(cfg MQTTConfig, disp *Display, pages *Pages, act *Activity, upd *
 		pages:            pages,
 		act:              act,
 		upd:              upd,
+		zoom:             zoom,
 		statusTopic:      base + "/status",
 		cmdTopic:         base + "/display/set",
 		stateTopic:       base + "/display/state",
@@ -226,6 +233,10 @@ func newBridge(cfg MQTTConfig, disp *Display, pages *Pages, act *Activity, upd *
 		rebootDiscovery:   disco("button", "reboot"),
 		shutdownCmdTopic:  base + "/power/shutdown/set",
 		shutdownDiscovery: disco("button", "shutdown"),
+
+		zoomCmdTopic:   base + "/zoom/set",
+		zoomStateTopic: base + "/zoom/state",
+		zoomDiscovery:  disco("number", "zoom"),
 
 		hostnameTopic: base + "/host/hostname", hostnameDiscovery: disco("sensor", "hostname"),
 		ipTopic: base + "/host/ip", ipDiscovery: disco("sensor", "ip"),
@@ -293,11 +304,12 @@ type MQTTManager struct {
 	pages *Pages
 	act   *Activity
 	upd   *UpdateChecker
+	zoom  *Zoom
 	cur   *Bridge
 }
 
-func NewMQTTManager(disp *Display, pages *Pages, act *Activity, upd *UpdateChecker) *MQTTManager {
-	m := &MQTTManager{disp: disp, pages: pages, act: act, upd: upd}
+func NewMQTTManager(disp *Display, pages *Pages, act *Activity, upd *UpdateChecker, zoom *Zoom) *MQTTManager {
+	m := &MQTTManager{disp: disp, pages: pages, act: act, upd: upd, zoom: zoom}
 	// Republish whenever the display state changes (including reverse-channel
 	// reports), through whichever bridge is currently live.
 	disp.SetObserver(func() {
@@ -314,6 +326,10 @@ func NewMQTTManager(disp *Display, pages *Pages, act *Activity, upd *UpdateCheck
 	// Republish the update entity whenever a newer release is discovered.
 	upd.SetObserver(func() {
 		m.withBridge(func(b *Bridge) { b.ifConnected(b.publishUpdate) })
+	})
+	// Republish the zoom level whenever it changes.
+	zoom.SetObserver(func() {
+		m.withBridge(func(b *Bridge) { b.ifConnected(b.publishZoom) })
 	})
 	return m
 }
@@ -373,7 +389,7 @@ func (m *MQTTManager) Apply(cfg MQTTConfig) {
 		log.Printf("mqtt: disabled (no broker configured)")
 		return
 	}
-	b := newBridge(cfg, m.disp, m.pages, m.act, m.upd)
+	b := newBridge(cfg, m.disp, m.pages, m.act, m.upd, m.zoom)
 	b.start()
 	m.cur = b
 }
@@ -497,6 +513,24 @@ func (b *Bridge) onConnect(client mqtt.Client) {
 	b.publish(client, b.rebootDiscovery, powerButton("reboot", "Reboot", "mdi:restart", b.rebootCmdTopic, "restart"), true)
 	b.publish(client, b.shutdownDiscovery, powerButton("shutdown", "Shut down", "mdi:power", b.shutdownCmdTopic, ""), true)
 
+	// Browser zoom as a number entity: 25..400% in 5% steps (touchkio's range),
+	// shown as a slider. Retained so HA rediscovers it after its own restart.
+	zoomCfg, _ := json.Marshal(map[string]any{
+		"name":                "Zoom",
+		"unique_id":           b.cfg.NodeID + "_zoom",
+		"command_topic":       b.zoomCmdTopic,
+		"state_topic":         b.zoomStateTopic,
+		"min":                 zoomMin,
+		"max":                 zoomMax,
+		"step":                5,
+		"mode":                "slider",
+		"unit_of_measurement": "%",
+		"icon":                "mdi:magnify-plus",
+		"availability_topic":  b.statusTopic,
+		"device":              b.device(),
+	})
+	b.publish(client, b.zoomDiscovery, zoomCfg, true)
+
 	// Device info sensors. Regular sensors, except uptime, which stays in HA's
 	// "Diagnostic" category.
 	info := func(obj, name, stateTopic, unit, devClass, icon string, diagnostic bool) []byte {
@@ -543,6 +577,7 @@ func (b *Bridge) onConnect(client mqtt.Client) {
 	b.publishDisk(client)
 	b.publishGenerations(client)
 	b.publishUpdate(client)
+	b.publishZoom(client)
 
 	subs := []struct {
 		topic string
@@ -555,6 +590,7 @@ func (b *Bridge) onConnect(client mqtt.Client) {
 		{b.pagePrevCmdTopic, b.onPrevPage},
 		{b.rebootCmdTopic, b.onReboot},
 		{b.shutdownCmdTopic, b.onShutdown},
+		{b.zoomCmdTopic, b.onZoom},
 	}
 	if b.upd.Installable() {
 		subs = append(subs, struct {
@@ -845,6 +881,31 @@ func (b *Bridge) onBrightness(client mqtt.Client, msg mqtt.Message) {
 		return
 	}
 	// On success SetBrightness fires the observer, which publishes the new value.
+}
+
+// onZoom applies an absolute browser zoom level (25..400%) from HA's number
+// slider. HA sends whole-number percents; out-of-range values are clamped by Set.
+func (b *Bridge) onZoom(client mqtt.Client, msg mqtt.Message) {
+	// HA's number entity may publish a float ("150.0"), so parse leniently.
+	f, err := strconv.ParseFloat(strings.TrimSpace(string(msg.Payload())), 64)
+	if err != nil {
+		log.Printf("mqtt: bad zoom %q: %v", msg.Payload(), err)
+		return
+	}
+	pct := int(f + 0.5)
+	if err := b.zoom.Set(pct); err != nil {
+		log.Printf("mqtt: zoom=%d: %v", pct, err)
+		// Republish actual value so HA's optimistic slider doesn't drift.
+		b.publishZoom(client)
+		return
+	}
+	// On success Set fires the observer, which publishes the new value.
+}
+
+// publishZoom publishes the current zoom level. Retained so HA shows it right
+// after its own restart.
+func (b *Bridge) publishZoom(client mqtt.Client) {
+	b.publish(client, b.zoomStateTopic, []byte(strconv.Itoa(b.zoom.Level())), true)
 }
 
 // publishStateNow publishes the current display state through this bridge, if it

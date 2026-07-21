@@ -32,6 +32,11 @@ let
   # timeout guards the rare window where the daemon isn't holding the FIFO open,
   # so reporting never wedges the caller. Read by watchDisplayState in the daemon.
   displayStateFifo = "/var/lib/dashboard/display-state.fifo";
+  # Browser zoom: the daemon writes "zoom <pct>" to this FIFO (backing the MQTT
+  # "Zoom" number entity) and persists the chosen level to zoomFile so the kiosk
+  # can restore it after a navigation or a session restart. See zoomAgent below.
+  zoomFifo = "/var/lib/dashboard/zoom.fifo";
+  zoomFile = "/var/lib/dashboard/zoom";
   reportDisplayState = pkgs.writeShellScript "ha-report-display-state" ''
     ${pkgs.coreutils}/bin/printf '%s\n' "$*" \
       | ${pkgs.coreutils}/bin/timeout 1 ${pkgs.coreutils}/bin/tee ${displayStateFifo} >/dev/null 2>&1 || true
@@ -314,6 +319,65 @@ let
     exec 3<> /var/lib/dashboard/nav.fifo
     while IFS= read -r url <&3; do
       [ -n "$url" ] && ${cdpNav} "$url" >/dev/null 2>&1 || true
+      # A full navigation resets CSS zoom, so re-apply the saved level to the
+      # freshly loaded page. Backgrounded (it waits for the new document to
+      # commit) so it doesn't stall the next nav command.
+      ${zoomRestore} >/dev/null 2>&1 &
+    done
+  '';
+
+  # Apply an absolute browser zoom (percent) to the live HA page via Chromium's
+  # loopback CDP port — the same mechanism as cdpNav. CSS `zoom` on the root
+  # element scales the whole page; setting it on documentElement (always present)
+  # avoids racing document.body during a load. Exits non-zero when there is no
+  # page target yet, so callers can retry.
+  cdpZoom = pkgs.writeShellScript "ha-kiosk-zoom" ''
+    set -u
+    pct="''${1:-}"
+    case "$pct" in ""|*[!0-9]*) exit 0 ;; esac
+    ws=$(${lib.getExe pkgs.curl} -s --max-time 2 http://localhost:9222/json 2>/dev/null \
+      | ${lib.getExe pkgs.jq} -r '[.[] | select(.type=="page")][0].webSocketDebuggerUrl // empty' 2>/dev/null)
+    if [ -z "$ws" ]; then exit 1; fi
+    ${lib.getExe pkgs.jq} -cn --arg e "document.documentElement.style.zoom=String($pct/100)" \
+      '{id:1,method:"Runtime.evaluate",params:{expression:$e}}' \
+      | ${pkgs.coreutils}/bin/timeout 5 ${pkgs.websocat}/bin/websocat "$ws" >/dev/null 2>&1 || true
+  '';
+
+  # Restore the persisted zoom level to the browser. Used both after a navigation
+  # (the new document loads at 100%) and once at session start. Waits for a page
+  # target to appear, then re-applies a few times so the level sticks past the
+  # load. A missing file or 100% (the default) is a no-op — nothing to restore.
+  zoomRestore = pkgs.writeShellScript "ha-zoom-restore" ''
+    set -u
+    [ -r ${zoomFile} ] || exit 0
+    z=$(${pkgs.coreutils}/bin/cat ${zoomFile} 2>/dev/null | ${pkgs.coreutils}/bin/tr -d '[:space:]')
+    case "$z" in ""|100) exit 0 ;; esac
+    applied=0
+    i=0
+    while [ "$i" -lt 60 ]; do
+      i=$((i + 1))
+      if ${cdpZoom} "$z"; then
+        applied=$((applied + 1))
+        # A few applies after the page is up settle it past the load, then stop.
+        [ "$applied" -ge 3 ] && exit 0
+      fi
+      ${pkgs.coreutils}/bin/sleep 1
+    done
+  '';
+
+  # Zoom agent: the daemon writes "zoom <pct>" to the zoom FIFO (backing the MQTT
+  # "Zoom" number entity) and this in-session loop applies it immediately. Held
+  # open read-write (fd 3) for the whole session and de-orphaned on start, exactly
+  # like the display and nav agents, so the daemon's writes never race a reopen.
+  zoomAgent = pkgs.writeShellScript "ha-zoom-agent" ''
+    for pid in $(${pkgs.procps}/bin/pgrep -f ha-zoom-agent); do
+      [ "$pid" = "$$" ] || kill "$pid" 2>/dev/null || true
+    done
+    exec 3<> ${zoomFifo}
+    while IFS=' ' read -r cmd arg <&3; do
+      case "$cmd" in
+        zoom) ${cdpZoom} "$arg" >/dev/null 2>&1 || true ;;
+      esac
     done
   '';
 
@@ -598,6 +662,11 @@ let
     # or the waybar Prev/Next buttons).
     exec ${navAgent}
 
+    # Applies browser zoom changes from the MQTT "Zoom" number entity, and
+    # restores the persisted level to the browser once it has loaded at startup.
+    exec ${zoomAgent}
+    exec ${zoomRestore}
+
     # Re-powers the display on the next input event after the Off button blanks it.
     exec ${wakeAgent}
 
@@ -721,6 +790,9 @@ in
       # Nav FIFO: the daemon writes a target URL; the in-session nav agent reads
       # it and navigates the browser.
       "p /var/lib/dashboard/nav.fifo 0660 ha-dashboard dashboard - -"
+      # Zoom FIFO: the daemon writes "zoom <pct>"; the in-session zoom agent reads
+      # it and applies CSS zoom over Chromium's CDP port.
+      "p /var/lib/dashboard/zoom.fifo 0660 ha-dashboard dashboard - -"
     ];
 
     hardware.graphics.enable = true;

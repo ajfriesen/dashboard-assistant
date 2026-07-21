@@ -85,7 +85,7 @@ GPU (or no mainline driver) fall back to software rendering — avoid.
 
 - [ ] Touch Keyboard
 - [ ] Add Volume Control
-- [ ] Add Manage Zoom
+- [x] Add Manage Zoom
 - [ ] Add Dark and Light Mode
 - [ ] Support Raspberry Pi
 

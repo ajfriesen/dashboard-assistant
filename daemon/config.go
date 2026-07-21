@@ -27,6 +27,8 @@ var (
 	mqttFile         = stateDir + "/mqtt.env"  // runtime MQTT settings, written by the web UI / config import
 	urlsFile         = stateDir + "/urls.json" // pushable page list (name+url), web UI / config import
 	navFifo          = stateDir + "/nav.fifo"  // daemon writes a URL; in-session agent navigates Chromium there
+	zoomFifo         = stateDir + "/zoom.fifo" // daemon writes "zoom <pct>"; in-session agent applies CSS zoom over CDP
+	zoomFile         = stateDir + "/zoom"      // persisted browser zoom percent, restored by the kiosk on launch
 	dmiFile          = stateDir + "/dmi.env"   // hardware serial, written by the daemon's root ExecStartPre (DMI is root-only)
 )
 
