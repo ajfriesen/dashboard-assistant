@@ -37,6 +37,11 @@ let
   # can restore it after a navigation or a session restart. See zoomAgent below.
   zoomFifo = "/var/lib/dashboard/zoom.fifo";
   zoomFile = "/var/lib/dashboard/zoom";
+  # Dark/light mode: the daemon writes "theme <dark|light>" to this FIFO (backing
+  # the MQTT "Dark mode" switch) and persists the choice to themeFile so the kiosk
+  # can re-assert it after a navigation or a session restart. See themeAgent below.
+  themeFifo = "/var/lib/dashboard/theme.fifo";
+  themeFile = "/var/lib/dashboard/theme";
   reportDisplayState = pkgs.writeShellScript "ha-report-display-state" ''
     ${pkgs.coreutils}/bin/printf '%s\n' "$*" \
       | ${pkgs.coreutils}/bin/timeout 1 ${pkgs.coreutils}/bin/tee ${displayStateFifo} >/dev/null 2>&1 || true
@@ -319,10 +324,12 @@ let
     exec 3<> /var/lib/dashboard/nav.fifo
     while IFS= read -r url <&3; do
       [ -n "$url" ] && ${cdpNav} "$url" >/dev/null 2>&1 || true
-      # A full navigation resets CSS zoom, so re-apply the saved level to the
-      # freshly loaded page. Backgrounded (it waits for the new document to
-      # commit) so it doesn't stall the next nav command.
+      # A full navigation resets CSS zoom and may drop the theme, so re-apply the
+      # saved zoom level and dark-mode choice to the freshly loaded page.
+      # Backgrounded (they wait for the new document to commit) so they don't
+      # stall the next nav command.
       ${zoomRestore} >/dev/null 2>&1 &
+      ${themeRestore} >/dev/null 2>&1 &
     done
   '';
 
@@ -377,6 +384,63 @@ let
     while IFS=' ' read -r cmd arg <&3; do
       case "$cmd" in
         zoom) ${cdpZoom} "$arg" >/dev/null 2>&1 || true ;;
+      esac
+    done
+  '';
+
+  # Flip Home Assistant's frontend between dark and light via Chromium's loopback
+  # CDP port. HA has no OS-level theme hook we can drive; instead we dispatch its
+  # own `settheme` frontend event with {dark:true|false}, which HA applies live
+  # and persists to the logged-in user's settings (so it survives reloads). This
+  # only touches the theme's dark mode, keeping whatever theme is selected. Exits
+  # non-zero until the page and its `hass` object are ready, so callers can retry;
+  # a no-op when the theme is already in the requested mode (avoids redundant saves).
+  cdpTheme = pkgs.writeShellScript "ha-kiosk-theme" ''
+    set -u
+    mode="''${1:-}"
+    case "$mode" in dark|light) ;; *) exit 0 ;; esac
+    dark=false
+    [ "$mode" = dark ] && dark=true
+    ws=$(${lib.getExe pkgs.curl} -s --max-time 2 http://localhost:9222/json 2>/dev/null \
+      | ${lib.getExe pkgs.jq} -r '[.[] | select(.type=="page")][0].webSocketDebuggerUrl // empty' 2>/dev/null)
+    if [ -z "$ws" ]; then exit 1; fi
+    expr="(function(){var el=document.querySelector('home-assistant');if(!el||!el.hass)return 'wait';if(el.hass.themes&&el.hass.themes.darkMode===$dark)return 'ok';el.dispatchEvent(new CustomEvent('settheme',{detail:{dark:$dark},bubbles:true,composed:true}));return 'ok';})()"
+    val=$(${lib.getExe pkgs.jq} -cn --arg e "$expr" \
+        '{id:1,method:"Runtime.evaluate",params:{expression:$e,returnByValue:true}}' \
+      | ${pkgs.coreutils}/bin/timeout 5 ${pkgs.websocat}/bin/websocat -n1 "$ws" 2>/dev/null \
+      | ${lib.getExe pkgs.jq} -r '.result.result.value // empty' 2>/dev/null)
+    [ "$val" = ok ]
+  '';
+
+  # Re-assert the persisted theme on the browser. Used after a navigation and once
+  # at session start. Waits for the page's `hass` object to be ready, then applies.
+  # Only "dark" needs restoring — light is HA's default and it remembers the choice
+  # itself — so a missing/light file is a no-op.
+  themeRestore = pkgs.writeShellScript "ha-theme-restore" ''
+    set -u
+    [ -r ${themeFile} ] || exit 0
+    t=$(${pkgs.coreutils}/bin/cat ${themeFile} 2>/dev/null | ${pkgs.coreutils}/bin/tr -d '[:space:]')
+    [ "$t" = dark ] || exit 0
+    i=0
+    while [ "$i" -lt 60 ]; do
+      i=$((i + 1))
+      ${cdpTheme} dark && exit 0
+      ${pkgs.coreutils}/bin/sleep 1
+    done
+  '';
+
+  # Theme agent: the daemon writes "theme <dark|light>" to the theme FIFO (backing
+  # the MQTT "Dark mode" switch) and this in-session loop applies it immediately.
+  # Held open read-write (fd 3) for the whole session and de-orphaned on start,
+  # exactly like the display, nav and zoom agents.
+  themeAgent = pkgs.writeShellScript "ha-theme-agent" ''
+    for pid in $(${pkgs.procps}/bin/pgrep -f ha-theme-agent); do
+      [ "$pid" = "$$" ] || kill "$pid" 2>/dev/null || true
+    done
+    exec 3<> ${themeFifo}
+    while IFS=' ' read -r cmd arg <&3; do
+      case "$cmd" in
+        theme) ${cdpTheme} "$arg" >/dev/null 2>&1 || true ;;
       esac
     done
   '';
@@ -667,6 +731,11 @@ let
     exec ${zoomAgent}
     exec ${zoomRestore}
 
+    # Applies dark/light changes from the MQTT "Dark mode" switch, and re-asserts
+    # a persisted dark theme once the dashboard has loaded at startup.
+    exec ${themeAgent}
+    exec ${themeRestore}
+
     # Re-powers the display on the next input event after the Off button blanks it.
     exec ${wakeAgent}
 
@@ -793,6 +862,9 @@ in
       # Zoom FIFO: the daemon writes "zoom <pct>"; the in-session zoom agent reads
       # it and applies CSS zoom over Chromium's CDP port.
       "p /var/lib/dashboard/zoom.fifo 0660 ha-dashboard dashboard - -"
+      # Theme FIFO: the daemon writes "theme <dark|light>"; the in-session theme
+      # agent reads it and flips HA's frontend theme over Chromium's CDP port.
+      "p /var/lib/dashboard/theme.fifo 0660 ha-dashboard dashboard - -"
     ];
 
     hardware.graphics.enable = true;

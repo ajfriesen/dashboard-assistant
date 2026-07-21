@@ -24,12 +24,14 @@ var (
 	// Reverse channel: in-session agents write the *actual* power state here and
 	// the daemon publishes it, so HA stays in sync with out-of-band changes.
 	displayStateFifo = stateDir + "/display-state.fifo"
-	mqttFile         = stateDir + "/mqtt.env"  // runtime MQTT settings, written by the web UI / config import
-	urlsFile         = stateDir + "/urls.json" // pushable page list (name+url), web UI / config import
-	navFifo          = stateDir + "/nav.fifo"  // daemon writes a URL; in-session agent navigates Chromium there
-	zoomFifo         = stateDir + "/zoom.fifo" // daemon writes "zoom <pct>"; in-session agent applies CSS zoom over CDP
-	zoomFile         = stateDir + "/zoom"      // persisted browser zoom percent, restored by the kiosk on launch
-	dmiFile          = stateDir + "/dmi.env"   // hardware serial, written by the daemon's root ExecStartPre (DMI is root-only)
+	mqttFile         = stateDir + "/mqtt.env"   // runtime MQTT settings, written by the web UI / config import
+	urlsFile         = stateDir + "/urls.json"  // pushable page list (name+url), web UI / config import
+	navFifo          = stateDir + "/nav.fifo"   // daemon writes a URL; in-session agent navigates Chromium there
+	zoomFifo         = stateDir + "/zoom.fifo"  // daemon writes "zoom <pct>"; in-session agent applies CSS zoom over CDP
+	zoomFile         = stateDir + "/zoom"       // persisted browser zoom percent, restored by the kiosk on launch
+	themeFifo        = stateDir + "/theme.fifo" // daemon writes "theme <dark|light>"; in-session agent flips HA's theme over CDP
+	themeFile        = stateDir + "/theme"      // persisted dark/light choice, restored by the kiosk on launch
+	dmiFile          = stateDir + "/dmi.env"    // hardware serial, written by the daemon's root ExecStartPre (DMI is root-only)
 )
 
 const sessionUnit = "greetd.service" // the Sway kiosk session; restart relaunches it

@@ -118,6 +118,7 @@ type Bridge struct {
 	act    *Activity
 	upd    *UpdateChecker
 	zoom   *Zoom
+	theme  *Theme
 	client mqtt.Client
 
 	statusTopic      string // availability (LWT)
@@ -173,6 +174,11 @@ type Bridge struct {
 	zoomStateTopic string
 	zoomDiscovery  string
 
+	// Dark mode: a switch (ON = dark).
+	themeCmdTopic   string
+	themeStateTopic string
+	themeDiscovery  string
+
 	// Device info / diagnostics.
 	hostnameTopic, hostnameDiscovery string
 	ipTopic, ipDiscovery             string
@@ -182,7 +188,7 @@ type Bridge struct {
 	serialTopic, serialDiscovery     string
 }
 
-func newBridge(cfg MQTTConfig, disp *Display, pages *Pages, act *Activity, upd *UpdateChecker, zoom *Zoom) *Bridge {
+func newBridge(cfg MQTTConfig, disp *Display, pages *Pages, act *Activity, upd *UpdateChecker, zoom *Zoom, theme *Theme) *Bridge {
 	base := "ha-dashboard/" + cfg.NodeID
 	disco := func(kind, obj string) string {
 		return fmt.Sprintf("%s/%s/%s/%s/config", cfg.DiscoveryPrefix, kind, cfg.NodeID, obj)
@@ -194,6 +200,7 @@ func newBridge(cfg MQTTConfig, disp *Display, pages *Pages, act *Activity, upd *
 		act:              act,
 		upd:              upd,
 		zoom:             zoom,
+		theme:            theme,
 		statusTopic:      base + "/status",
 		cmdTopic:         base + "/display/set",
 		stateTopic:       base + "/display/state",
@@ -237,6 +244,10 @@ func newBridge(cfg MQTTConfig, disp *Display, pages *Pages, act *Activity, upd *
 		zoomCmdTopic:   base + "/zoom/set",
 		zoomStateTopic: base + "/zoom/state",
 		zoomDiscovery:  disco("number", "zoom"),
+
+		themeCmdTopic:   base + "/theme/set",
+		themeStateTopic: base + "/theme/state",
+		themeDiscovery:  disco("switch", "theme"),
 
 		hostnameTopic: base + "/host/hostname", hostnameDiscovery: disco("sensor", "hostname"),
 		ipTopic: base + "/host/ip", ipDiscovery: disco("sensor", "ip"),
@@ -305,11 +316,12 @@ type MQTTManager struct {
 	act   *Activity
 	upd   *UpdateChecker
 	zoom  *Zoom
+	theme *Theme
 	cur   *Bridge
 }
 
-func NewMQTTManager(disp *Display, pages *Pages, act *Activity, upd *UpdateChecker, zoom *Zoom) *MQTTManager {
-	m := &MQTTManager{disp: disp, pages: pages, act: act, upd: upd, zoom: zoom}
+func NewMQTTManager(disp *Display, pages *Pages, act *Activity, upd *UpdateChecker, zoom *Zoom, theme *Theme) *MQTTManager {
+	m := &MQTTManager{disp: disp, pages: pages, act: act, upd: upd, zoom: zoom, theme: theme}
 	// Republish whenever the display state changes (including reverse-channel
 	// reports), through whichever bridge is currently live.
 	disp.SetObserver(func() {
@@ -330,6 +342,10 @@ func NewMQTTManager(disp *Display, pages *Pages, act *Activity, upd *UpdateCheck
 	// Republish the zoom level whenever it changes.
 	zoom.SetObserver(func() {
 		m.withBridge(func(b *Bridge) { b.ifConnected(b.publishZoom) })
+	})
+	// Republish the dark/light state whenever it changes.
+	theme.SetObserver(func() {
+		m.withBridge(func(b *Bridge) { b.ifConnected(b.publishTheme) })
 	})
 	return m
 }
@@ -389,7 +405,7 @@ func (m *MQTTManager) Apply(cfg MQTTConfig) {
 		log.Printf("mqtt: disabled (no broker configured)")
 		return
 	}
-	b := newBridge(cfg, m.disp, m.pages, m.act, m.upd, m.zoom)
+	b := newBridge(cfg, m.disp, m.pages, m.act, m.upd, m.zoom, m.theme)
 	b.start()
 	m.cur = b
 }
@@ -531,6 +547,21 @@ func (b *Bridge) onConnect(client mqtt.Client) {
 	})
 	b.publish(client, b.zoomDiscovery, zoomCfg, true)
 
+	// Dark mode as a switch: ON drives Home Assistant's frontend into its dark
+	// theme, OFF back to light. Retained so HA rediscovers it after a restart.
+	themeCfg, _ := json.Marshal(map[string]any{
+		"name":               "Dark mode",
+		"unique_id":          b.cfg.NodeID + "_theme",
+		"command_topic":      b.themeCmdTopic,
+		"state_topic":        b.themeStateTopic,
+		"payload_on":         "ON",
+		"payload_off":        "OFF",
+		"icon":               "mdi:theme-light-dark",
+		"availability_topic": b.statusTopic,
+		"device":             b.device(),
+	})
+	b.publish(client, b.themeDiscovery, themeCfg, true)
+
 	// Device info sensors. Regular sensors, except uptime, which stays in HA's
 	// "Diagnostic" category.
 	info := func(obj, name, stateTopic, unit, devClass, icon string, diagnostic bool) []byte {
@@ -578,6 +609,7 @@ func (b *Bridge) onConnect(client mqtt.Client) {
 	b.publishGenerations(client)
 	b.publishUpdate(client)
 	b.publishZoom(client)
+	b.publishTheme(client)
 
 	subs := []struct {
 		topic string
@@ -591,6 +623,7 @@ func (b *Bridge) onConnect(client mqtt.Client) {
 		{b.rebootCmdTopic, b.onReboot},
 		{b.shutdownCmdTopic, b.onShutdown},
 		{b.zoomCmdTopic, b.onZoom},
+		{b.themeCmdTopic, b.onTheme},
 	}
 	if b.upd.Installable() {
 		subs = append(subs, struct {
@@ -906,6 +939,29 @@ func (b *Bridge) onZoom(client mqtt.Client, msg mqtt.Message) {
 // after its own restart.
 func (b *Bridge) publishZoom(client mqtt.Client) {
 	b.publish(client, b.zoomStateTopic, []byte(strconv.Itoa(b.zoom.Level())), true)
+}
+
+// onTheme switches the browser between dark (ON) and light (OFF) from HA's
+// switch.
+func (b *Bridge) onTheme(client mqtt.Client, msg mqtt.Message) {
+	dark := strings.EqualFold(strings.TrimSpace(string(msg.Payload())), "ON")
+	if err := b.theme.Set(dark); err != nil {
+		log.Printf("mqtt: theme dark=%v: %v", dark, err)
+		// Republish actual state so HA's optimistic toggle doesn't drift.
+		b.publishTheme(client)
+		return
+	}
+	// On success Set fires the observer, which publishes the new state.
+}
+
+// publishTheme publishes the current dark/light state. Retained so HA shows it
+// right after its own restart.
+func (b *Bridge) publishTheme(client mqtt.Client) {
+	state := "OFF"
+	if b.theme.Dark() {
+		state = "ON"
+	}
+	b.publish(client, b.themeStateTopic, []byte(state), true)
 }
 
 // publishStateNow publishes the current display state through this bridge, if it

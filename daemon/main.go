@@ -71,7 +71,8 @@ func main() {
 	act := NewActivity()
 	upd := NewUpdateChecker()
 	zoom := NewZoom()
-	srv := &server{nm: nm, mqtt: NewMQTTManager(disp, pages, act, upd, zoom), pages: pages}
+	theme := NewTheme()
+	srv := &server{nm: nm, mqtt: NewMQTTManager(disp, pages, act, upd, zoom, theme), pages: pages}
 
 	// MQTT bridge to Home Assistant (opt-in: disabled unless a broker is set).
 	// Settings come from the environment overlaid by the runtime state file the
