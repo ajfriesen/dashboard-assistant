@@ -600,7 +600,16 @@ let
         # shellcheck disable=SC2086
         set -- $geom
         ox=$1; oy=$2; ow=$3; oh=$4
+        # vboard's keys carry CSS min-heights, so the keyboard has a hard minimum
+        # height (5 rows + suggestion bar). Read the height it actually mapped at
+        # and never force the window shorter than that, or the bottom key row gets
+        # clipped inside the too-short surface. On tall enough outputs the 40%
+        # target wins; on small screens the natural height does.
+        nh=$(${pkgs.sway}/bin/swaymsg -t get_tree \
+          | ${lib.getExe pkgs.jq} -r --arg a "$app" \
+            '[.. | objects | select(.app_id? == $a)][0].rect.height // 0')
         kh=$(( oh * 2 / 5 ))
+        if [ "''${nh:-0}" -gt "$kh" ]; then kh=$nh; fi
         ky=$(( oy + oh - kh - bar ))
         ${pkgs.sway}/bin/swaymsg \
           "[app_id=\"$app\"] resize set width ''${ow}px height ''${kh}px, move absolute position ''${ox}px ''${ky}px" \
