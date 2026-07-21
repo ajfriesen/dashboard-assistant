@@ -161,6 +161,12 @@ type Bridge struct {
 	updateCmdTopic   string
 	updateDiscovery  string
 
+	// Power buttons: reboot + shut down the device.
+	rebootCmdTopic    string
+	rebootDiscovery   string
+	shutdownCmdTopic  string
+	shutdownDiscovery string
+
 	// Device info / diagnostics.
 	hostnameTopic, hostnameDiscovery string
 	ipTopic, ipDiscovery             string
@@ -215,6 +221,11 @@ func newBridge(cfg MQTTConfig, disp *Display, pages *Pages, act *Activity, upd *
 		updateStateTopic: base + "/update/state",
 		updateCmdTopic:   base + "/update/install",
 		updateDiscovery:  disco("update", "update"),
+
+		rebootCmdTopic:    base + "/power/reboot/set",
+		rebootDiscovery:   disco("button", "reboot"),
+		shutdownCmdTopic:  base + "/power/shutdown/set",
+		shutdownDiscovery: disco("button", "shutdown"),
 
 		hostnameTopic: base + "/host/hostname", hostnameDiscovery: disco("sensor", "hostname"),
 		ipTopic: base + "/host/ip", ipDiscovery: disco("sensor", "ip"),
@@ -466,6 +477,26 @@ func (b *Bridge) onConnect(client mqtt.Client) {
 	update, _ := json.Marshal(updateCfg)
 	b.publish(client, b.updateDiscovery, update, true)
 
+	// Power buttons: reboot + shut down. Command-only entities (a press just
+	// publishes the payload); the reboot device_class gives HA the restart icon.
+	powerButton := func(obj, name, icon, cmd, devClass string) []byte {
+		m := map[string]any{
+			"name":               name,
+			"unique_id":          b.cfg.NodeID + "_" + obj,
+			"command_topic":      cmd,
+			"availability_topic": b.statusTopic,
+			"icon":               icon,
+			"device":             b.device(),
+		}
+		if devClass != "" {
+			m["device_class"] = devClass
+		}
+		p, _ := json.Marshal(m)
+		return p
+	}
+	b.publish(client, b.rebootDiscovery, powerButton("reboot", "Reboot", "mdi:restart", b.rebootCmdTopic, "restart"), true)
+	b.publish(client, b.shutdownDiscovery, powerButton("shutdown", "Shut down", "mdi:power", b.shutdownCmdTopic, ""), true)
+
 	// Device info sensors. Regular sensors, except uptime, which stays in HA's
 	// "Diagnostic" category.
 	info := func(obj, name, stateTopic, unit, devClass, icon string, diagnostic bool) []byte {
@@ -522,6 +553,8 @@ func (b *Bridge) onConnect(client mqtt.Client) {
 		{b.pageSelectCmdTopic, b.onSelectPage},
 		{b.pageNextCmdTopic, b.onNextPage},
 		{b.pagePrevCmdTopic, b.onPrevPage},
+		{b.rebootCmdTopic, b.onReboot},
+		{b.shutdownCmdTopic, b.onShutdown},
 	}
 	if b.upd.Installable() {
 		subs = append(subs, struct {
@@ -637,6 +670,23 @@ func (b *Bridge) onSelectPage(_ mqtt.Client, msg mqtt.Message) {
 
 func (b *Bridge) onNextPage(_ mqtt.Client, _ mqtt.Message) { b.pages.Next() }
 func (b *Bridge) onPrevPage(_ mqtt.Client, _ mqtt.Message) { b.pages.Prev() }
+
+// onReboot / onShutdown power-cycle the device via logind. Fire-and-forget: a
+// successful call tears down the daemon with the system, so there's no state to
+// republish — only failures (e.g. polkit denial) get logged.
+func (b *Bridge) onReboot(_ mqtt.Client, _ mqtt.Message) {
+	log.Printf("mqtt: reboot requested")
+	if err := systemReboot(); err != nil {
+		log.Printf("mqtt: reboot: %v", err)
+	}
+}
+
+func (b *Bridge) onShutdown(_ mqtt.Client, _ mqtt.Message) {
+	log.Printf("mqtt: shutdown requested")
+	if err := systemPowerOff(); err != nil {
+		log.Printf("mqtt: shutdown: %v", err)
+	}
+}
 
 // onSlot handles an edit from a "Page N" text entity: apply it, then re-announce
 // (options changed) and republish all slots + the current page so HA reflects

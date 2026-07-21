@@ -102,14 +102,24 @@ in
 
   # Let the daemon manage *only* the greetd session unit (the Sway kiosk) and the
   # ha-rollback@ recovery units — nothing else on the system. Restarting greetd
-  # relaunches the kiosk; starting ha-rollback@<n> rolls back and reboots.
+  # relaunches the kiosk; starting ha-rollback@<n> rolls back and reboots. The
+  # reboot / power-off actions back the HA power buttons (see daemon/power.go).
   security.polkit.extraConfig = ''
     polkit.addRule(function(action, subject) {
-      if (subject.user == "ha-dashboard" &&
-          action.id == "org.freedesktop.systemd1.manage-units") {
-        var unit = action.lookup("unit");
-        if (unit == "greetd.service") return polkit.Result.YES;
-        if (unit && unit.indexOf("ha-rollback@") == 0) return polkit.Result.YES;
+      if (subject.user == "ha-dashboard") {
+        if (action.id == "org.freedesktop.systemd1.manage-units") {
+          var unit = action.lookup("unit");
+          if (unit == "greetd.service") return polkit.Result.YES;
+          if (unit && unit.indexOf("ha-rollback@") == 0) return polkit.Result.YES;
+        }
+        // reboot / power-off, plus logind's -multiple-sessions and
+        // -ignore-inhibit variants: a kiosk has several concurrent sessions
+        // (greeter + kiosk) and idle inhibitors, so logind checks those action
+        // ids instead of the plain one — grant the whole family by prefix.
+        if (action.id.indexOf("org.freedesktop.login1.reboot") == 0 ||
+            action.id.indexOf("org.freedesktop.login1.power-off") == 0) {
+          return polkit.Result.YES;
+        }
       }
     });
   '';
