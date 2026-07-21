@@ -1,8 +1,33 @@
+# Show this help menu (default when `just` is run with no arguments).
+help:
+  @echo "ha-dashboard-os — just recipes"
+  @echo
+  @echo "Build images:"
+  @echo "  build-image            Build the bootable installer ISO (x86)"
+  @echo "  build-disk             Build the installable raw disk image (btrfs+zstd)"
+  @echo "  build-rpi4             Build the Raspberry Pi 4 SD-card image (aarch64)"
+  @echo
+  @echo "Run / connect (QEMU):"
+  @echo "  qemu-run               Boot the built ISO in QEMU"
+  @echo "  qemu-ssh               SSH into the VM, tunnelling the daemon (:8080) and CDP (:9222)"
+  @echo "  net-check              Hit the networking API from inside the guest"
+  @echo
+  @echo "Drive the kiosk (needs qemu-ssh running):"
+  @echo "  inject-token TOKEN     Log the kiosk into HA by injecting a long-lived token via CDP"
+  @echo "  cdp-eval EXPR          Evaluate arbitrary JS in the kiosk page over CDP"
+  @echo
+  @echo "Introspect:"
+  @echo "  options                List the dashboard.* NixOS config options"
+  @echo
+  @echo "Run 'just --list' for the raw recipe list."
+
+[doc('Build the bootable installer ISO (x86)')]
 build-image:
   nix build .#nixosConfigurations.dashboard-x86.config.system.build.isoImage
 
 # Build the installable raw disk image (btrfs+zstd, built by disko). dd
 # result/ha-dashboard.raw to the SSD, then boot it from the native SATA port.
+[doc('Build the installable raw disk image (btrfs+zstd)')]
 build-disk:
   nix build .#disk-image
   @echo
@@ -13,6 +38,7 @@ build-disk:
 # Build the Raspberry Pi 4 (aarch64) SD-card image. On an x86 host this builds
 # via binfmt emulation, fetching most from the binary cache — the Pi kernel +
 # image assembly still build locally, so it's slow. Then flash it to an SD card.
+[doc('Build the Raspberry Pi 4 SD-card image (aarch64)')]
 build-rpi4:
   nix build .#packages.aarch64-linux.rpi4-image --out-link result-rpi4
   @echo
@@ -25,6 +51,7 @@ build-rpi4:
 # wizard showing "Connected via ethernet" (the wired / existing-connection path).
 # Interact with the wizard directly on the QEMU display, or drive it from the
 # host via `just qemu-ssh` (see the loopback note there).
+[doc('Boot the built ISO in QEMU')]
 qemu-run:
   qemu-system-x86_64 \
     -enable-kvm \
@@ -45,6 +72,7 @@ qemu-run:
 # in a host browser, or curl the provisioning API. (A raw QEMU port-forward would
 # arrive as non-loopback and get 403.) Requires SSH login to be enabled on the
 # image — see the note in README/daemon for the test-only credentials snippet.
+[doc('SSH into the VM, tunnelling the daemon (:8080) and CDP (:9222)')]
 qemu-ssh:
   ssh -p 2222 \
     -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o LogLevel=ERROR \
@@ -52,6 +80,7 @@ qemu-ssh:
 
 # Exercise the networking API from inside the guest (loopback, so guarded
 # endpoints work). Runs over SSH without needing the tunnel session open.
+[doc('Hit the networking API from inside the guest')]
 net-check:
   ssh -p 2222 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o LogLevel=ERROR \
     root@localhost 'curl -fsS localhost:8080/api/state; echo; \
@@ -62,6 +91,7 @@ net-check:
 # :9222) and dashboard.debug.chromiumRemoteDebugging = true baked into the image.
 # Create the token in HA: Profile -> Security -> Long-lived access tokens.
 #   just inject-token "eyJhbGciOi..."
+[doc('Log the kiosk into HA by injecting a long-lived token via CDP')]
 inject-token token:
   #!/usr/bin/env bash
   set -euo pipefail
@@ -82,6 +112,7 @@ inject-token token:
 # Needs `just qemu-ssh` running. Use double quotes inside the expression.
 #   just cdp-eval 'location.href'
 #   just cdp-eval 'localStorage.getItem("hassTokens")'
+[doc('Evaluate arbitrary JS in the kiosk page over CDP')]
 cdp-eval expr:
   #!/usr/bin/env bash
   set -euo pipefail
@@ -94,6 +125,7 @@ cdp-eval expr:
 
 # List the dashboard.* config options this OS defines (name, type, default,
 # description). Introspects the NixOS module options via optionAttrSetToDocList.
+[doc('List the dashboard.* NixOS config options')]
 options:
   #!/usr/bin/env bash
   set -euo pipefail
