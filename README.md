@@ -1,95 +1,103 @@
-# Dashbord Assistant OS
+# Dashboard Assistant
 
-This is 
+**A declarative, unbreakable Home Assistant Kiosk OS built on NixOS.** Flash it to
+a mini-PC or tablet, point it at your Home Assistant, and get a self-contained
+wall dashboard that integrates *back* into HA over MQTT — so the screen itself
+becomes something you can see and control from your automations.
 
-## Goals
 
-- Easy Flash and Install, no Linux knowledge needed
-- Integreates with Home Assistant via MQTT
-- Unbreakable System via NixOS (A bad update will boot into the last working version)
-- Support for x86, Raspberry Pi (Comming Soon, do not have a Pi at the moment)
-- 
+<p align="center">
+  <img src="docs/img/home-assistant.jpg" width="49%" alt="Dashboard View">
+  <img src="docs/img/keyboard.jpg" width="49%" alt="Keyboard View">
+  <img src="docs/img/recovery.jpg" width="49%" alt="Recovery View">
+  <img src="docs/img/shopping-list.jpg" width="49%" alt="Web application View">
+  <img src="docs/img/website.jpg" width="49%" alt="Website View">
+</p>
 
-- easy install
-- easy updates
-- integrates with home assistant
-- allows to configure multiple urls
-- wake up by touch
-- control:
-  - display on/off
-  - display brightness
-  - touch screen
-  - new update sensor
-  - update via Home Assistant or GUI
-  - manage zoom
-  - take screenshot display
-  - show ip
-  - volume control
-  - reboot, shutdown
-- montior:
-  - battery
-  - temperature
-  - cpu
-  - memory
-  - storage
-  - 
 
-## Hardware support
+> [!WARNING]
+> This is in early development. Expect lots of changes.
+> However, I am using this myself every day.
 
-The OS is a **Chromium kiosk on NixOS**. That imposes three hard requirements, and
-everything below follows from them:
+> [!NOTE]
+> I am using AI and I disclose that.
+> If you do not like that, close this tab and go touch grass.
 
-1. **64-bit arch with a binary cache** — `x86_64` or `aarch64`. 32-bit ARM
-   (`armv7`) is uncached/marginal; **ARMv6** (Pi 1, Pi Zero) is unsupported by
-   nixpkgs — no cache means compiling everything (incl. Chromium) from source,
-   which is effectively impossible on those boards.
-2. **≥ 2 GB RAM** — Chromium rendering a Home Assistant dashboard (plus Sway,
-   waybar, the on-screen keyboard and the daemon) needs it. 1 GB is marginal;
-   under 1 GB will OOM.
-3. **A GPU with a mainline mesa/KMS driver** — for smooth Wayland/Chromium.
-   Boards that fall back to software rendering are too slow for a live dashboard.
+> [!IMPORTANT]
+> This is not affiliated to the Open Home Foundation or Home Assistant.
+> This is my personal project.
 
-### Status by device class
+---
 
-| Device class | Arch | RAM | Status | Notes |
-|---|---|---|---|---|
-| x86_64 mini-PC / thin client / tablet | `x86_64` | ≥ 2 GB | ✅ Supported | Primary target. Broad driver support, single disk image. |
-| Raspberry Pi 4 / 5 / 400 | `aarch64` | ≥ 2 GB | 🛠️ Planned | v3d mesa driver, `nixos-hardware` modules. Intended first Pi. |
-| Rockchip RK3566 / RK3588 boards (Rock 5, Orange Pi 5, Quartz64) | `aarch64` | ≥ 4 GB | 🧪 Candidate | Panfrost GPU, strong CPUs. Great fit; needs bring-up. |
-| Pi 3B+ and other 1 GB aarch64 boards | `aarch64` | 1 GB | ⚠️ Marginal | Boots, but Chromium is slow and tight. Simple dashboards only. |
-| 32-bit ARM (Pi 2, armv7 MPU boards, STM32MP157x-DK2) | `armv7` | ≤ 512 MB | ❌ Won't work | Too little RAM + weak/GLES2-only GPU + shaky armv7 Chromium. |
-| ARMv6 (Pi 1, Pi Zero / Zero W) | `armv6` | ≤ 512 MB | ❌ Won't work | No nixpkgs binary cache for armv6 — everything would build from source. |
+- [Dashboard Assistant](#dashboard-assistant)
+  - [Why](#why)
+  - [Features](#features)
+  - [Roadmap/Todos/Thoughts](#roadmaptodosthoughts)
+  - [Credits](#credits)
+  - [License](#license)
+  - [Author](#author)
 
-### Good aarch64 boards to extend to
+## Why
 
-Pick **64-bit, ≥ 2 GB (prefer 4 GB+)**, with a **mainline mesa GPU driver** and a
-[`nixos-hardware`](https://github.com/NixOS/nixos-hardware) module to ease bring-up:
+I was annoyed how much setup you needed in order to get a good dashboard experience.
+Install some Linux Distribution, add packages, do this and that, configure things.
+The motivation was born to make this easier, with no Linux knowledge needed.
 
-- **Raspberry Pi 4 / 5 / 400** — best community + `nixos-hardware` support; v3d GPU. Start here.
-- **Radxa Rock 5B / Rock 4** (RK3588 / RK3399) — powerful, Panfrost GPU, up to 16–32 GB RAM.
-- **Orange Pi 5 / 5 Plus** (RK3588) — same SoC family, inexpensive, lots of RAM options.
-- **Pine64 Quartz64 / RockPro64** (RK3566 / RK3399) — open-friendly, Panfrost.
-- **Odroid N2+ / C4** (Amlogic Mali via Panfrost/Lima) — solid mainline support.
-- **Libre Computer** aarch64 boards — mainline-focused.
-- Reused **aarch64 tablets / Chromebooks** — integrated screen, battery and touch, if you can boot mainline.
+- **Flash and go.** No Linux knowledge needed. Write one image, boot it, finish a
+  short on-screen setup (Wi-Fi + HA URL), and it logs itself in.
+- **Over-the-air updates.** Update the whole OS from Home Assistant.
+- **Unbreakable.** It's NixOS. A bad update never bricks the wall panel — the
+  device keeps every previous generation and boots the last working one
+  automatically if a switch goes wrong (and you can roll back by hand).
+- **Two-way Home Assistant integration.** Most kiosks *show* HA. This one also
+  *appears in* HA: the display, brightness, zoom, theme, power, current page and
+  device health are all MQTT entities you can automate. Turn off your display after sme time and turn on when motion has been detected.
 
-GPU sweet spots: **Broadcom v3d** (Pi 4/5) and **Rockchip + Panfrost** (RK3566/RK3588) —
-both have solid mesa Wayland drivers. Boards with only a GLES2 Vivante / older-Mali
-GPU (or no mainline driver) fall back to software rendering — avoid.
 
-> Adding an aarch64 target also means a second system closure in the build/update
-> pipeline, so the update manifest is keyed by `system` (`x86_64-linux` /
-> `aarch64-linux`) and each device pulls the closure matching its own arch.
+## Features
 
-## TODO
+Full-screen Chromium locked to your dashboard, multiple cyclable URLs, touch
+wake, an on-screen keyboard, token auto-login, failed-boot rollback, atomic OTA
+updates, and a first-boot Wi-Fi/HA setup wizard — all controllable from Home
+Assistant, which auto-discovers the device as a set of MQTT entities.
 
-- [ ] Touch Keyboard
-- [ ] Add Volume Control
-- [x] Add Manage Zoom
-- [x] Add Dark and Light Mode
-- [ ] Support Raspberry Pi
+See the [**Features**](https://ajfriesen.github.io/dashboard-assistant/features/)
+page for the full list and the complete Home Assistant entity reference
+(controls + sensors).
 
-## Inspiration
+## Roadmap/Todos/Thoughts
 
-- TouchKio
-- FullPageOS
+- [ ] Raspberry Pi 4 and 5 support with the official touchscreen
+- [ ] Testing Raspberry Pi 3 support
+- [ ] Possibly more SBC boards
+- [ ] Possibly Microsoft Surface Tablets
+- [x] Fix touch keyboard
+- [ ] Remove boot selection for generations on startup
+- [ ] Make the installation smaller
+- [ ] Track a NixOS Channel instead of unstable
+- [ ] Check if the provision file can always be used instead only on first boot
+- [ ] Adjust layout for menus, static nav bar on top
+- [ ] Removing menu items, like pages
+- [ ] Add flashable images somewhere
+- [ ] Create a logo
+- [ ] Add website + documentation
+- [ ] Add live logs in config and allow copy paste
+- [ ] Think bout allowing configuring the dashboard over the network
+- [ ] Think about encryption
+
+
+## Credits
+
+Inspired by [TouchKio](https://github.com/leukipp/touchkio).
+
+## License
+
+Not yet licensed. Until a `LICENSE` file is added, all rights are reserved.
+
+## Author
+
+This project was created by Andrej Friesen in 2026.
+
+<a href="https://github.com/ajfriesen">
+  <img src="https://github.com/ajfriesen.png" width="100" style="border-radius: 50%;" alt="Andrej Friesen">
+</a>
