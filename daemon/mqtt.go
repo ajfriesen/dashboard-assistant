@@ -179,6 +179,16 @@ type Bridge struct {
 	themeStateTopic string
 	themeDiscovery  string
 
+	// Screenshot: a button to capture the web view + an image entity showing the
+	// result (a thumbnail you click to enlarge). screenshotCameraDiscovery is a
+	// legacy camera config topic that earlier builds announced; we clear it on
+	// connect so it doesn't linger as a duplicate entity.
+	screenshotCmdTopic        string
+	screenshotImageTopic      string
+	screenshotButtonDiscovery string
+	screenshotImageDiscovery  string
+	screenshotCameraDiscovery string
+
 	// Device info / diagnostics.
 	hostnameTopic, hostnameDiscovery string
 	ipTopic, ipDiscovery             string
@@ -253,6 +263,12 @@ func newBridge(cfg MQTTConfig, disp *Display, pages *Pages, act *Activity, upd *
 		themeCmdTopic:   base + "/theme/set",
 		themeStateTopic: base + "/theme/state",
 		themeDiscovery:  disco("switch", "theme"),
+
+		screenshotCmdTopic:        base + "/screenshot/set",
+		screenshotImageTopic:      base + "/screenshot/image",
+		screenshotButtonDiscovery: disco("button", "screenshot_take"),
+		screenshotImageDiscovery:  disco("image", "screenshot"),
+		screenshotCameraDiscovery: disco("camera", "screenshot"),
 
 		hostnameTopic: base + "/host/hostname", hostnameDiscovery: disco("sensor", "hostname"),
 		ipTopic: base + "/host/ip", ipDiscovery: disco("sensor", "ip"),
@@ -571,6 +587,32 @@ func (b *Bridge) onConnect(client mqtt.Client) {
 	})
 	b.publish(client, b.themeDiscovery, themeCfg, true)
 
+	// Screenshot: a button that captures the current web view + a camera entity
+	// that displays the latest capture (published base64 to its topic).
+	shotBtn, _ := json.Marshal(map[string]any{
+		"name":               "Take screenshot",
+		"unique_id":          b.cfg.NodeID + "_screenshot_take",
+		"command_topic":      b.screenshotCmdTopic,
+		"availability_topic": b.statusTopic,
+		"icon":               "mdi:camera",
+		"device":             b.device(),
+	})
+	b.publish(client, b.screenshotButtonDiscovery, shotBtn, true)
+	// Clear the legacy camera entity that earlier builds announced, so its retained
+	// config doesn't linger as a duplicate alongside the image entity below.
+	b.publish(client, b.screenshotCameraDiscovery, nil, true)
+	shotImg, _ := json.Marshal(map[string]any{
+		"name":               "Screenshot",
+		"unique_id":          b.cfg.NodeID + "_screenshot",
+		"image_topic":        b.screenshotImageTopic,
+		"image_encoding":     "b64",
+		"content_type":       "image/jpeg",
+		"availability_topic": b.statusTopic,
+		"icon":               "mdi:monitor-screenshot",
+		"device":             b.device(),
+	})
+	b.publish(client, b.screenshotImageDiscovery, shotImg, true)
+
 	// Device info sensors. Regular sensors, except uptime, which stays in HA's
 	// "Diagnostic" category.
 	info := func(obj, name, stateTopic, unit, devClass, icon string, diagnostic bool) []byte {
@@ -677,6 +719,7 @@ func (b *Bridge) onConnect(client mqtt.Client) {
 		{b.shutdownCmdTopic, b.onShutdown},
 		{b.zoomCmdTopic, b.onZoom},
 		{b.themeCmdTopic, b.onTheme},
+		{b.screenshotCmdTopic, b.onScreenshot},
 	}
 	if b.upd.Installable() {
 		subs = append(subs, struct {
