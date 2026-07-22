@@ -18,7 +18,7 @@ jobs:
     name: Build x86_64 live ISO
     runs-on: ubuntu-latest
     env:
-      R2_ENDPOINT: https://${{ vars.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+      R2_ENDPOINT: https://${{ vars.R2_ACCOUNT_ID }}.eu.r2.cloudflarestorage.com
     steps:
       - uses: actions/checkout@v7
 
