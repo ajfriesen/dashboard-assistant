@@ -10,6 +10,7 @@ becomes something you can see and control from your automations.
   <img src="docs/img/home-assistant.jpg" width="49%" alt="Dashboard View">
   <img src="docs/img/keyboard.jpg" width="49%" alt="Keyboard View">
   <img src="docs/img/recovery.jpg" width="49%" alt="Recovery View">
+  <img src="docs/img/mqtt_control.png" width="49%" alt="MQTT Control"> 
   <img src="docs/img/shopping-list.jpg" width="49%" alt="Web application View">
   <img src="docs/img/website.jpg" width="49%" alt="Website View">
 </p>
