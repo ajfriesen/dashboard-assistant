@@ -1,7 +1,7 @@
 name: build
 
 # Manual dev builds. Produces the same flashable x86_64 disk image as the
-# release workflow (disko btrfs+zstd raw, xz-compressed), but stamps it with the
+# release workflow (disko btrfs+zstd raw, zstd-compressed), but stamps it with the
 # build date + commit SHA and publishes it to a separate `dev/` prefix in R2
 # (never a tag, never a GitHub Release). Set an R2 lifecycle rule to expire
 # objects under `dev/` so these snapshots clean themselves up.
@@ -30,17 +30,6 @@ jobs:
       - name: Flake check
         run: nix flake check --no-build
 
-      # A from-scratch image build (a multi-GB raw disk image, plus more
-      # transiently in the Nix store) can exhaust the ~14 GB free on a stock
-      # ubuntu-latest runner. Reclaim the preinstalled toolchains we don't use.
-      - name: Free up disk space
-        run: |
-          set -uo pipefail
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-            /usr/local/share/boost /opt/hostedtoolcache || true
-          sudo docker image prune --all --force || true
-          df -h /
-
       - name: Build disk image
         run: nix build .#disk-image
 
@@ -51,8 +40,8 @@ jobs:
         id: stage
         run: |
           set -euo pipefail
-          asset="ha-dashboard-$(date -u +%Y-%m-%d)-${GITHUB_SHA::7}-x86_64.raw.xz"
-          xz -T0 -c "$(readlink -f result)/ha-dashboard.raw" > "$asset"
+          asset="ha-dashboard-$(date -u +%Y-%m-%d)-${GITHUB_SHA::7}-x86_64.raw.zst"
+          zstd -19 -T0 -c "$(readlink -f result)/ha-dashboard.raw" > "$asset"
           echo "asset=$asset" >> "$GITHUB_OUTPUT"
 
       - name: Upload image artifact
