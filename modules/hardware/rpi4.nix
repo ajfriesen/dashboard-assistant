@@ -19,6 +19,15 @@
   dashboard.update.installable = true;
   dashboard.update.flakeAttr = "dashboard-rpi4";
 
+  # Boot chain: the GPU firmware can't read extlinux.conf, so the
+  # generic-extlinux-compatible loader (enabled by the nixos-hardware pi4
+  # module) needs U-Boot as an intermediary. This copies u-boot.bin onto the
+  # firmware partition and points config.txt's kernel= at it (plus arm_64bit=1),
+  # so start4.elf → u-boot.bin → extlinux.conf → Linux. Without it there is no
+  # kernel on the FAT partition and the Pi flashes the green LED 7 times
+  # ("kernel image not found") with a black screen.
+  hardware.raspberry-pi.firmware.uboot.enable = true;
+
   # sd-image-aarch64 pulls in the generic "all-hardware" initrd module list
   # (dw-hdmi, analogix, …), but the downstream linux-rpi kernel builds SD/USB/
   # ext4 straight into the kernel and doesn't ship many of those modules — so the
