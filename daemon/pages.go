@@ -63,13 +63,6 @@ func (p *Pages) SetObserver(f func()) {
 	p.mu.Unlock()
 }
 
-// List returns a copy of the configured pages.
-func (p *Pages) List() []Page {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return append([]Page(nil), p.list...)
-}
-
 // Labels returns the select options in list order.
 func (p *Pages) Labels() []string {
 	p.mu.Lock()
