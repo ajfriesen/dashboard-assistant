@@ -9,13 +9,11 @@
     * { box-sizing: border-box; }
     body {
       margin: 0; font-family: system-ui, sans-serif; background: #10151c; color: #e8edf2;
-      display: flex; justify-content: center; min-height: 100vh; padding: 5vh 4vw;
+      min-height: 100vh; display: flex; flex-direction: column;
     }
-    /* margin:auto centers the card vertically without clipping its top when a
-       panel grows taller than the viewport (unlike align-items:center), so the
-       sticky tab bar has something to scroll under. */
-    .card { width: 100%; max-width: 560px; margin: auto; }
-    h1 { font-size: 1.6rem; margin: 0 0 1.5rem; }
+    /* Content area below the navbar: horizontally centered card with top spacing. */
+    .content { flex: 1; display: flex; justify-content: center; padding: 5vh 4vw; }
+    .card { width: 100%; max-width: 560px; }
     label { display: block; margin: 1rem 0 .35rem; font-size: .95rem; color: #9fb0c0; }
     input, select, button {
       width: 100%; font-size: 1.15rem; padding: .85rem 1rem; border-radius: 12px;
@@ -36,17 +34,20 @@
     .banner.hidden { display: none; }
     .toggle { margin-top: .9rem; }
     .toggle a { color: #6ea8fe; text-decoration: none; font-size: .9rem; cursor: pointer; }
-    /* Pinned to the top of the viewport so the tabs stay reachable while a long
-       panel scrolls underneath. The opaque background (matching the body) hides
-       content passing behind it; z-index keeps it above the panels. */
-    .tabs {
-      display: flex; gap: .5rem;
+    /* Full-width top navbar, pinned so it stays put while a panel scrolls under it.
+       Brand sits at the far left; the tab links group at the far right. */
+    .topbar {
       position: sticky; top: 0; z-index: 10;
-      background: #10151c; padding: .9rem 0; margin: 0 0 1.25rem;
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 1rem; flex-wrap: wrap; row-gap: .5rem;
+      padding: .75rem 1.25rem;
+      background: #182029; border-bottom: 1px solid #2a3644;
     }
+    .brand { font-size: 1.2rem; font-weight: 700; color: #e8edf2; white-space: nowrap; }
+    .tabs { display: flex; gap: .5rem; }
     .tab {
-      flex: 1; text-align: center; padding: .6rem 1rem; border-radius: 10px;
-      background: #182029; border: 1px solid #2a3644; color: #9fb0c0;
+      text-align: center; padding: .55rem 1.1rem; border-radius: 10px;
+      background: #10151c; border: 1px solid #2a3644; color: #9fb0c0;
       cursor: pointer; font-size: .95rem; user-select: none; touch-action: manipulation;
     }
     .tab.active { background: #263241; color: #e8edf2; border-color: #2f81f7; }
@@ -58,15 +59,17 @@
   </style>
 </head>
 <body>
-  <div class="card">
-    <h1>Dashboard Assistant</h1>
-
+  <header class="topbar">
+    <span class="brand">Dashboard Assistant</span>
     <nav class="tabs">
       <a id="tab-btn-setup" class="tab active">Dashboard</a>
       <a id="tab-btn-mqtt" class="tab">MQTT</a>
       <a id="tab-btn-recovery" class="tab">Recovery</a>
     </nav>
+  </header>
 
+  <main class="content">
+    <div class="card">
     <div id="panel-setup">
       <div id="banner" class="banner hidden"></div>
 
@@ -128,7 +131,8 @@
       <button id="genRollback" type="button" style="background:#b3391f;border-color:#b3391f;">Roll back &amp; reboot</button>
       <div id="genMsg" class="msg"></div>
     </div>
-  </div>
+    </div>
+  </main>
 
   <script>
     const $ = (id) => document.getElementById(id);
