@@ -86,6 +86,14 @@ let
       fi
     ''}
 
+    # Chromium refuses to launch when its SingletonLock names a different host
+    # ("profile in use by another computer") — which happens once the MAC-derived
+    # hostname is assigned, or after an unclean shutdown leaves a stale lock. A
+    # kiosk only ever runs one instance, so clearing the guard first is safe.
+    # Explicit names (not a glob): `set -f` above disables pathname expansion.
+    chromeProfile="''${XDG_CONFIG_HOME:-$HOME/.config}/chromium"
+    rm -f "$chromeProfile/SingletonLock" "$chromeProfile/SingletonCookie" "$chromeProfile/SingletonSocket" 2>/dev/null || true
+
     exec ${lib.getExe pkgs.chromium} \
       --app="$URL" \
       --no-first-run \
