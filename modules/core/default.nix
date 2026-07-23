@@ -58,6 +58,10 @@
     '';
   };
   networking.networkmanager.enable = true;
+  # Don't let NM set the transient hostname from DHCP / reverse-DNS — that would
+  # override the MAC-derived name from set-hostname-from-mac above (e.g. a stale
+  # router lease resurrecting the old "ha-dashboard").
+  networking.networkmanager.settings.main.hostname-mode = "none";
   # The minimal profile disables wireless (wpa_supplicant); NetworkManager owns Wi-Fi.
   networking.wireless.enable = lib.mkForce false;
 
