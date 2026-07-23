@@ -6,7 +6,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// importConfig is the schema of the ha-dashboard.yaml bundle imported from a USB
+// importConfig is the schema of the dashboard-assistant.yaml bundle imported from a USB
 // stick or the ESP. Every field is optional; only the ones present are applied.
 type importConfig struct {
 	HAURL string `yaml:"ha_url"`

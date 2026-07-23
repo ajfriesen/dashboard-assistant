@@ -44,7 +44,7 @@ type Pages struct {
 // NewPages loads the persisted list. The FIFO path can be overridden for testing.
 func NewPages() *Pages {
 	fifo := navFifo
-	if v := os.Getenv("DASHBOARD_NAV_FIFO"); v != "" {
+	if v := os.Getenv("DASHBOARD_ASSISTANT_NAV_FIFO"); v != "" {
 		fifo = v
 	}
 	list, err := loadPages()

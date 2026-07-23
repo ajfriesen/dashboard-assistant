@@ -1,5 +1,5 @@
 {
-  description = "HA Dashboard OS — declarative single-purpose Home Assistant kiosk";
+  description = "Dashboard Assistant OS — declarative single-purpose Home Assistant kiosk";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
@@ -42,7 +42,7 @@
     {
       nixosConfigurations = {
         # Live ISO — boots from removable media (USB / SATA-via-USB adapter).
-        dashboard-x86 = lib.nixosSystem {
+        dashboard-assistant-x86 = lib.nixosSystem {
           inherit system;
           specialArgs = { inherit impermanence version; };
           modules = [
@@ -54,7 +54,7 @@
 
         # Installed system — persistent, boots from a fixed SATA disk, updatable
         # with `nixos-rebuild switch`. Build a flashable image via `.#disk-image`.
-        dashboard-x86-disk = lib.nixosSystem {
+        dashboard-assistant-x86-disk = lib.nixosSystem {
           inherit system;
           specialArgs = { inherit impermanence version; };
           modules = [
@@ -68,7 +68,7 @@
         # Raspberry Pi 4 (aarch64) — SD-card image, for bring-up/testing on a Pi.
         # Build the flashable image via `.#rpi4-image` (aarch64; this host builds
         # it via binfmt emulation, fetching most from the binary cache).
-        dashboard-rpi4 = lib.nixosSystem {
+        dashboard-assistant-rpi4 = lib.nixosSystem {
           system = "aarch64-linux";
           specialArgs = { inherit impermanence version; };
           modules = [
@@ -81,10 +81,10 @@
       };
 
       # Raw btrfs+zstd EFI disk image built by disko: `nix build .#disk-image`
-      # (or `just build-disk`), then dd result/ha-dashboard.raw to the SSD. The
+      # (or `just build-disk`), then dd result/dashboard-assistant.raw to the SSD. The
       # layout lives in modules/hardware/disk-layout.nix.
       packages.${system} = {
-        disk-image = self.nixosConfigurations.dashboard-x86-disk.config.system.build.diskoImages;
+        disk-image = self.nixosConfigurations.dashboard-assistant-x86-disk.config.system.build.diskoImages;
 
         # vboard (on-screen keyboard) is packaged from source — not in nixpkgs.
         # Exposed here so it can be built/tested standalone (`nix build .#vboard`);
@@ -95,7 +95,7 @@
       # Raspberry Pi 4 SD-card image: `nix build .#rpi4-image`, then flash
       # result/sd-image/*.img.zst to the card (zstdcat | dd, or unzstd first).
       packages.aarch64-linux.rpi4-image =
-        self.nixosConfigurations.dashboard-rpi4.config.system.build.sdImage;
+        self.nixosConfigurations.dashboard-assistant-rpi4.config.system.build.sdImage;
 
       devShells.${system}.default = pkgs.mkShell {
         packages = [
@@ -106,6 +106,8 @@
           pkgs.curl
           pkgs.jq
           pkgs.websocat
+          # Static site generator for the docs/ site (`zensical serve`/`build`).
+          pkgs.zensical
         ];
       };
 

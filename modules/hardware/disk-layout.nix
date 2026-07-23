@@ -8,14 +8,14 @@
 # install onto someone else's board overrides it, e.g.
 #   disko-install --flake .#dashboard-x86-disk --disk main /dev/nvme0n1
 #
-# Two subvolumes: @ (root, incl. /var/lib/dashboard state) and @nix (the store).
+# Two subvolumes: @ (root, incl. /var/lib/dashboard-assistant state) and @nix (the store).
 # Splitting them keeps the door open for the impermanence/erase-your-darlings
 # plan later without a reformat.
 {
   disko.devices.disk.main = {
     type = "disk";
     device = "/dev/vda";
-    imageName = "ha-dashboard";
+    imageName = "dashboard-assistant";
     # Small image: just big enough for the initial closure. It's grown to fill
     # the real disk on first boot (boot.growPartition in generic-x86-disk.nix +
     # the x-systemd.growfs mount option on / below), so flashing to a 16 GB
@@ -47,11 +47,18 @@
                 mountpoint = "/";
                 # x-systemd.growfs: after the partition is grown, expand the
                 # btrfs to fill it (one resize grows the whole fs incl. @nix).
-                mountOptions = [ "compress=zstd" "noatime" "x-systemd.growfs" ];
+                mountOptions = [
+                  "compress=zstd"
+                  "noatime"
+                  "x-systemd.growfs"
+                ];
               };
               "/@nix" = {
                 mountpoint = "/nix";
-                mountOptions = [ "compress=zstd" "noatime" ];
+                mountOptions = [
+                  "compress=zstd"
+                  "noatime"
+                ];
               };
             };
           };

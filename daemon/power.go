@@ -10,7 +10,7 @@ import (
 // logind is the canonical entry point (it handles inhibitors and the clean
 // shutdown transaction), and it carries its own polkit actions
 // — org.freedesktop.login1.reboot and .power-off — which a scoped rule grants the
-// ha-dashboard user (see modules/core/daemon.nix). Both are called
+// dashboard-assistant user (see modules/core/daemon.nix). Both are called
 // non-interactive (false): there's no seat/agent to prompt, so the polkit rule
 // must allow it outright or the call is denied.
 func systemReboot() error   { return logindPower("Reboot") }

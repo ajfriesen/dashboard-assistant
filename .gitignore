@@ -3,5 +3,9 @@ result
 result-*
 
 # Stray Go build artifact — the daemon is built by buildGoModule
-/daemon/ha-dashboard-api
+/daemon/dashboard-assistant-api
 ha.yaml
+
+# Zensical docs build output
+/site/
+/.cache/

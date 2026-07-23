@@ -1,4 +1,4 @@
-// Command ha-dashboard-api is the management daemon for HA Dashboard OS.
+// Command dashboard-assistant-api is the management daemon for Dashboard Assistant OS.
 //
 // It owns first-boot provisioning: it computes the device state (SETUP /
 // RECONNECT / READY) that the Cage/Chromium launcher polls, serves the
@@ -52,7 +52,7 @@ func (s *server) deriveState() State {
 }
 
 func main() {
-	addr := os.Getenv("DASHBOARD_ADDR")
+	addr := os.Getenv("DASHBOARD_ASSISTANT_ADDR")
 	if addr == "" {
 		addr = ":8080"
 	}
@@ -125,7 +125,7 @@ func main() {
 
 	mux.HandleFunc("/", srv.handleRoot)
 
-	log.Printf("ha-dashboard-api listening on %s (state=%s)", addr, srv.deriveState())
+	log.Printf("dashboard-assistant-api listening on %s (state=%s)", addr, srv.deriveState())
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
@@ -370,7 +370,7 @@ func (s *server) handleGenerations(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleRollback boots into the requested generation (switches the profile and
-// reboots, via the privileged ha-rollback@ unit). POST {"generation": N}.
+// reboots, via the privileged dashboard-assistant-rollback@ unit). POST {"generation": N}.
 func (s *server) handleRollback(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST only"})

@@ -6,7 +6,7 @@
 # MQTT `update` entity (see daemon/update.go, daemon/mqtt.go).
 #
 # Applying (installable targets only — the persistent disk / SD image, not the
-# ephemeral ISO): a privileged, root-run `ha-update@<tag>.service` does the
+# ephemeral ISO): a privileged, root-run `dashboard-assistant-update@<tag>.service` does the
 # `nixos-rebuild switch --flake <ref>/<tag>#<attr>`, triggered by the daemon over
 # the scoped polkit rule below when HA's Install button is pressed. The flake ref
 # and hardware attr are baked in; only the target tag is a runtime instance.
@@ -20,21 +20,21 @@
   ...
 }:
 let
-  cfg = config.dashboard.update;
+  cfg = config.dashboardAssistant.update;
 
-  updateScript = pkgs.writeShellScript "ha-update" ''
+  updateScript = pkgs.writeShellScript "dashboard-assistant-update" ''
     set -eu
     ref=''${1:-}
     # Re-validate the tag the daemon passed (it also validates) before splicing
     # it into the flake ref — only safe git-tag characters, no shell metachars.
     case "$ref" in "" | *[!A-Za-z0-9._-]*) echo "invalid ref: $ref" >&2; exit 1 ;; esac
     target="${cfg.flakeRef}/$ref#${cfg.flakeAttr}"
-    echo "ha-update: switching to $target"
+    echo "dashboard-assistant-update: switching to $target"
     exec ${pkgs.nixos-rebuild}/bin/nixos-rebuild switch --flake "$target" --refresh
   '';
 in
 {
-  options.dashboard.update = {
+  options.dashboardAssistant.update = {
     repo = lib.mkOption {
       type = lib.types.str;
       default = "ajfriesen/dashboard-assistant";
@@ -67,7 +67,7 @@ in
       default = false;
       description = ''
         Whether this image can apply updates in place. Enables the privileged
-        ha-update@ rebuild unit and the HA Install button. Leave off for the
+        dashboard-assistant-update@ rebuild unit and the HA Install button. Leave off for the
         ephemeral live ISO (a switch there wouldn't persist); on for the
         persistent disk / SD targets.
       '';
@@ -76,7 +76,7 @@ in
     flakeRef = lib.mkOption {
       type = lib.types.str;
       default = "github:${cfg.repo}";
-      defaultText = lib.literalExpression ''"github:''${config.dashboard.update.repo}"'';
+      defaultText = lib.literalExpression ''"github:''${config.dashboardAssistant.update.repo}"'';
       example = "git+https://git.ajfriesen.com/ajfriesen/dashboard-assistant";
       description = ''
         Flake reference the update rebuild pulls from. The target release tag is
@@ -105,11 +105,11 @@ in
       ];
 
       # Baked-in installed version the daemon reports to HA. World-readable
-      # (0444), read at /etc/ha-dashboard/version.
-      environment.etc."ha-dashboard/version".text = version;
+      # (0444), read at /etc/dashboard-assistant/version.
+      environment.etc."dashboard-assistant/version".text = version;
 
       # Merges with the daemon service's other environment settings (daemon.nix).
-      systemd.services.ha-dashboard-daemon.environment = {
+      systemd.services.dashboard-assistant-daemon.environment = {
         UPDATE_REPO = cfg.repo;
         UPDATE_API_BASE = cfg.apiBase;
         UPDATE_CHECK_INTERVAL = cfg.checkInterval;
@@ -121,15 +121,15 @@ in
       assertions = [
         {
           assertion = cfg.flakeAttr != "";
-          message = "dashboard.update.flakeAttr must be set when dashboard.update.installable is true.";
+          message = "dashboardAssistant.update.flakeAttr must be set when dashboardAssistant.update.installable is true.";
         }
       ];
 
       # Update to release %i and switch. Instantiated per tag by the daemon
-      # (ha-update@<tag>.service); the script re-validates %i. Runs as root; a
+      # (dashboard-assistant-update@<tag>.service); the script re-validates %i. Runs as root; a
       # long build must not time out.
-      systemd.services."ha-update@" = {
-        description = "Update HA Dashboard OS to release %i and switch";
+      systemd.services."dashboard-assistant-update@" = {
+        description = "Update Dashboard Assistant OS to release %i and switch";
         # nixos-rebuild shells out to nix (build/eval) and git (flake fetch).
         path = [
           config.nix.package
@@ -142,15 +142,15 @@ in
         };
       };
 
-      # Let the daemon start *only* the ha-update@ units (alongside the greetd /
-      # ha-rollback@ grants in daemon.nix). extraConfig is concatenated, so this
+      # Let the daemon start *only* the dashboard-assistant-update@ units (alongside the greetd /
+      # dashboard-assistant-rollback@ grants in daemon.nix). extraConfig is concatenated, so this
       # adds a rule rather than replacing the existing one.
       security.polkit.extraConfig = ''
         polkit.addRule(function(action, subject) {
-          if (subject.user == "ha-dashboard" &&
+          if (subject.user == "dashboard-assistant" &&
               action.id == "org.freedesktop.systemd1.manage-units") {
             var unit = action.lookup("unit");
-            if (unit && unit.indexOf("ha-update@") == 0) return polkit.Result.YES;
+            if (unit && unit.indexOf("dashboard-assistant-update@") == 0) return polkit.Result.YES;
           }
         });
       '';

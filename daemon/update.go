@@ -25,10 +25,10 @@ const (
 )
 
 // installedVersion is the release version baked into the image by the update
-// module (environment.etc."ha-dashboard/version"). Source/dirty builds have no
+// module (environment.etc."dashboard-assistant/version"). Source/dirty builds have no
 // file, so it reports "dev" — which never matches a release tag, i.e. "unknown".
 func installedVersion() string {
-	path := envOr("DASHBOARD_VERSION_FILE", "/etc/ha-dashboard/version")
+	path := envOr("DASHBOARD_ASSISTANT_VERSION_FILE", "/etc/dashboard-assistant/version")
 	if b, err := os.ReadFile(path); err == nil {
 		if v := strings.TrimSpace(string(b)); v != "" {
 			return v
@@ -90,7 +90,7 @@ func NewUpdateChecker() *UpdateChecker {
 }
 
 // Installable reports whether this image can apply updates in place (a
-// privileged ha-update@ unit is present). The bridge only offers HA an Install
+// privileged dashboard-assistant-update@ unit is present). The bridge only offers HA an Install
 // button when true.
 func (u *UpdateChecker) Installable() bool { return u.installable }
 
@@ -145,7 +145,7 @@ func (u *UpdateChecker) fetchLatest() (Release, error) {
 	// GitHub rejects requests without a User-Agent; the Accept header pins the
 	// v3 JSON media type (harmless to Gitea, which ignores it).
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "ha-dashboard-os")
+	req.Header.Set("User-Agent", "dashboard-assistant-os")
 
 	resp, err := u.client.Do(req)
 	if err != nil {

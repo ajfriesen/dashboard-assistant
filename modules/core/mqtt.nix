@@ -5,7 +5,7 @@
 #
 # There are two ways to configure it, and the daemon merges them:
 #   1. This module's EnvironmentFile — a declarative baseline baked at flash time.
-#   2. The runtime state file /var/lib/dashboard/mqtt.env, written by the setup
+#   2. The runtime state file /var/lib/dashboard-assistant/mqtt.env, written by the setup
 #      web UI (MQTT tab) and by config import (the `mqtt:` YAML block). This
 #      *overrides* the EnvironmentFile, since it reflects a later user choice.
 # So this option is optional: MQTT can be set up entirely from the UI / a USB
@@ -21,7 +21,7 @@ in
   options.dashboard.mqtt.environmentFile = lib.mkOption {
     type = lib.types.nullOr lib.types.path;
     default = null;
-    example = "/var/lib/dashboard/mqtt.env";
+    example = "/var/lib/dashboard-assistant/mqtt.env";
     description = ''
       Path to a systemd EnvironmentFile with the MQTT settings the daemon reads.
       Leave null to keep MQTT disabled. Recognised keys:
@@ -38,6 +38,6 @@ in
   };
 
   config = lib.mkIf (cfg.environmentFile != null) {
-    systemd.services.ha-dashboard-daemon.serviceConfig.EnvironmentFile = cfg.environmentFile;
+    systemd.services.dashboard-assistant-daemon.serviceConfig.EnvironmentFile = cfg.environmentFile;
   };
 }

@@ -12,36 +12,36 @@
   ...
 }:
 let
-  dbg = config.dashboard.debug.chromiumRemoteDebugging;
-  autoLogin = config.dashboard.kiosk.autoLogin;
+  dbg = config.dashboardAssistant.debug.chromiumRemoteDebugging;
+  autoLogin = config.dashboardAssistant.kiosk.autoLogin;
   # On-screen keyboard, packaged from source (not in nixpkgs). See packages/vboard.nix.
   vboard = pkgs.callPackage ../../packages/vboard.nix { };
   # Fallback dashboard target if runtime.env is somehow missing. Normal config
-  # lives in /var/lib/dashboard/runtime.env (HA_URL=...), written by the daemon.
+  # lives in /var/lib/dashboard-assistant/runtime.env (HA_URL=...), written by the daemon.
   defaultUrl = "http://homeassistant.local:8123";
   daemonBase = "http://localhost:8080";
   # Long-lived HA token staged by the daemon (config import / seed).
-  tokenPath = "/var/lib/dashboard/token";
+  tokenPath = "/var/lib/dashboard-assistant/token";
   # Set by the Off button after it DPMS-blanks the display; the wake agent
   # clears it and powers the display back on when input (e.g. a touch) arrives.
-  displayOffFlag = "/var/lib/dashboard/display-off";
+  displayOffFlag = "/var/lib/dashboard-assistant/display-off";
   # Reverse status channel: the daemon can only track power changes it commands
   # over MQTT, so anything that changes the panel in-session (Off button, wake-on-
   # touch, a session restart) must report the *actual* state here for the daemon
   # to republish — otherwise HA drifts out of sync. Best-effort, non-blocking:
   # timeout guards the rare window where the daemon isn't holding the FIFO open,
   # so reporting never wedges the caller. Read by watchDisplayState in the daemon.
-  displayStateFifo = "/var/lib/dashboard/display-state.fifo";
+  displayStateFifo = "/var/lib/dashboard-assistant/display-state.fifo";
   # Browser zoom: the daemon writes "zoom <pct>" to this FIFO (backing the MQTT
   # "Zoom" number entity) and persists the chosen level to zoomFile so the kiosk
   # can restore it after a navigation or a session restart. See zoomAgent below.
-  zoomFifo = "/var/lib/dashboard/zoom.fifo";
-  zoomFile = "/var/lib/dashboard/zoom";
+  zoomFifo = "/var/lib/dashboard-assistant/zoom.fifo";
+  zoomFile = "/var/lib/dashboard-assistant/zoom";
   # Dark/light mode: the daemon writes "theme <dark|light>" to this FIFO (backing
   # the MQTT "Dark mode" switch) and persists the choice to themeFile so the kiosk
   # can re-assert it after a navigation or a session restart. See themeAgent below.
-  themeFifo = "/var/lib/dashboard/theme.fifo";
-  themeFile = "/var/lib/dashboard/theme";
+  themeFifo = "/var/lib/dashboard-assistant/theme.fifo";
+  themeFile = "/var/lib/dashboard-assistant/theme";
   reportDisplayState = pkgs.writeShellScript "ha-report-display-state" ''
     ${pkgs.coreutils}/bin/printf '%s\n' "$*" \
       | ${pkgs.coreutils}/bin/timeout 1 ${pkgs.coreutils}/bin/tee ${displayStateFifo} >/dev/null 2>&1 || true
@@ -53,9 +53,9 @@ let
   kioskLauncher = pkgs.writeShellScript "ha-kiosk-launch" ''
     set -eu
     HA_URL="${defaultUrl}"
-    if [ -r /var/lib/dashboard/runtime.env ]; then
+    if [ -r /var/lib/dashboard-assistant/runtime.env ]; then
       # shellcheck disable=SC1091
-      . /var/lib/dashboard/runtime.env
+      . /var/lib/dashboard-assistant/runtime.env
     fi
 
     # Ask the daemon what to display. Fall back to SETUP if it is slow to start,
@@ -105,7 +105,7 @@ let
   # injects raw key events via /dev/uinput — so leaving these off lets Chromium
   # handle keys natively and the typed characters actually land.
 
-  # Display power agent: the daemon (running as ha-dashboard) can't reach Sway's
+  # Display power agent: the daemon (running as dashboard-assistant) can't reach Sway's
   # IPC socket under the kiosk user's 0700 runtime dir, so it writes "on"/"off"
   # to a shared FIFO and this in-session loop applies it via swaymsg. Backs the
   # MQTT "Display" light entity. The FIFO is created by tmpfiles (see below);
@@ -132,7 +132,7 @@ let
     # always present and the daemon's non-blocking writes never race against a
     # reopen (which previously caused ENXIO and dropped commands). Same trick the
     # daemon uses for the reverse FIFO.
-    exec 3<> /var/lib/dashboard/display.fifo
+    exec 3<> /var/lib/dashboard-assistant/display.fifo
     # IFS=' ' (not empty) so the line splits into verb + argument — "bright 40"
     # becomes cmd=bright arg=40; "on"/"off" leave arg empty.
     while IFS=' ' read -r cmd arg <&3; do
@@ -242,9 +242,9 @@ let
     if [ -z "$TOKEN" ]; then exit 0; fi
 
     HA_URL="${defaultUrl}"
-    if [ -r /var/lib/dashboard/runtime.env ]; then
+    if [ -r /var/lib/dashboard-assistant/runtime.env ]; then
       # shellcheck disable=SC1091
-      . /var/lib/dashboard/runtime.env
+      . /var/lib/dashboard-assistant/runtime.env
     fi
     # Derive the HA origin (scheme://host[:port]) so we only inject into the HA
     # page — not the daemon's setup/waiting pages on a different origin.
@@ -305,9 +305,9 @@ let
   # the same way the launcher does, then navigate there.
   navHome = pkgs.writeShellScript "ha-kiosk-nav-home" ''
     HA_URL="${defaultUrl}"
-    if [ -r /var/lib/dashboard/runtime.env ]; then
+    if [ -r /var/lib/dashboard-assistant/runtime.env ]; then
       # shellcheck disable=SC1091
-      . /var/lib/dashboard/runtime.env
+      . /var/lib/dashboard-assistant/runtime.env
     fi
     exec ${cdpNav} "$HA_URL"
   '';
@@ -321,7 +321,7 @@ let
     for pid in $(${pkgs.procps}/bin/pgrep -f ha-nav-agent); do
       [ "$pid" = "$$" ] || kill "$pid" 2>/dev/null || true
     done
-    exec 3<> /var/lib/dashboard/nav.fifo
+    exec 3<> /var/lib/dashboard-assistant/nav.fifo
     while IFS= read -r url <&3; do
       [ -n "$url" ] && ${cdpNav} "$url" >/dev/null 2>&1 || true
       # A full navigation resets CSS zoom and may drop the theme, so re-apply the
@@ -468,9 +468,9 @@ let
   #               i2c-dev + the i2c group; see hardware.i2c below).
   #   software  → universal fallback: wl-gammarelay-rs dims the rendered output
   #               (not the backlight), so it works on any display / VM.
-  # dashboard.kiosk.brightness.method forces a tier; "auto" (default) detects.
-  brightnessMethod = config.dashboard.kiosk.brightness.method;
-  brightnessEnv = "/var/lib/dashboard/brightness.env";
+  # dashboardAssistant.kiosk.brightness.method forces a tier; "auto" (default) detects.
+  brightnessMethod = config.dashboardAssistant.kiosk.brightness.method;
+  brightnessEnv = "/var/lib/dashboard-assistant/brightness.env";
 
   brightnessResolve = pkgs.writeShellScript "ha-brightness-resolve" ''
     set -u
@@ -769,7 +769,7 @@ let
   sessionCommand = "${pkgs.dbus}/bin/dbus-run-session -- ${pkgs.sway}/bin/sway --config ${swayConfig}";
 in
 {
-  options.dashboard.kiosk.autoLogin = lib.mkOption {
+  options.dashboardAssistant.kiosk.autoLogin = lib.mkOption {
     type = lib.types.bool;
     default = true;
     description = ''
@@ -782,7 +782,7 @@ in
     '';
   };
 
-  options.dashboard.kiosk.brightness.method = lib.mkOption {
+  options.dashboardAssistant.kiosk.brightness.method = lib.mkOption {
     type = lib.types.enum [
       "auto"
       "backlight"
@@ -822,7 +822,7 @@ in
     services.spice-vdagentd.enable = true;
 
     # Session starts after the daemon so /api/state is answerable on first paint.
-    systemd.services.greetd.after = [ "ha-dashboard-daemon.service" ];
+    systemd.services.greetd.after = [ "dashboard-assistant-daemon.service" ];
 
     # vboard (on-screen keyboard) available for manual debugging; the ⌨ bar
     # button toggles it via oskToggle. waybar draws the button bar. The Dim/
@@ -856,24 +856,24 @@ in
       "uinput"
     ];
 
-    # Shared state dir: daemon (ha-dashboard) writes, kiosk reads. Both are in the
+    # Shared state dir: daemon (dashboard-assistant) writes, kiosk reads. Both are in the
     # `dashboard` group (see default.nix).
     systemd.tmpfiles.rules = [
-      "d /var/lib/dashboard 0775 ha-dashboard dashboard - -"
+      "d /var/lib/dashboard-assistant 0775 dashboard-assistant dashboard-assistant - -"
       # FIFO the daemon writes display on/off to; the in-session agent reads it.
-      "p /var/lib/dashboard/display.fifo 0660 ha-dashboard dashboard - -"
+      "p /var/lib/dashboard-assistant/display.fifo 0660 dashboard-assistant dashboard-assistant - -"
       # Reverse FIFO: the in-session agents report the actual power state; the
       # daemon reads it and republishes over MQTT so HA stays in sync.
-      "p /var/lib/dashboard/display-state.fifo 0660 ha-dashboard dashboard - -"
+      "p /var/lib/dashboard-assistant/display-state.fifo 0660 dashboard-assistant dashboard-assistant - -"
       # Nav FIFO: the daemon writes a target URL; the in-session nav agent reads
       # it and navigates the browser.
-      "p /var/lib/dashboard/nav.fifo 0660 ha-dashboard dashboard - -"
+      "p /var/lib/dashboard-assistant/nav.fifo 0660 dashboard-assistant dashboard-assistant - -"
       # Zoom FIFO: the daemon writes "zoom <pct>"; the in-session zoom agent reads
       # it and applies CSS zoom over Chromium's CDP port.
-      "p /var/lib/dashboard/zoom.fifo 0660 ha-dashboard dashboard - -"
+      "p /var/lib/dashboard-assistant/zoom.fifo 0660 dashboard-assistant dashboard-assistant - -"
       # Theme FIFO: the daemon writes "theme <dark|light>"; the in-session theme
       # agent reads it and flips HA's frontend theme over Chromium's CDP port.
-      "p /var/lib/dashboard/theme.fifo 0660 ha-dashboard dashboard - -"
+      "p /var/lib/dashboard-assistant/theme.fifo 0660 dashboard-assistant dashboard-assistant - -"
     ];
 
     hardware.graphics.enable = true;

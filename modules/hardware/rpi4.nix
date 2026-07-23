@@ -16,8 +16,8 @@
 
   # In-place updates: rebuild this config from the release tag. No systemd-boot
   # auto-rollback here (extlinux), but manual rollback from the recovery UI works.
-  dashboard.update.installable = true;
-  dashboard.update.flakeAttr = "dashboard-rpi4";
+  dashboardAssistant.update.installable = true;
+  dashboardAssistant.update.flakeAttr = "dashboard-assistant-rpi4";
 
   # Boot chain: the GPU firmware can't read extlinux.conf, so the
   # generic-extlinux-compatible loader (enabled by the nixos-hardware pi4

@@ -12,9 +12,9 @@ import (
 )
 
 // State directory layout (shared group `dashboard`; daemon writes, kiosk reads).
-// The base dir is overridable via DASHBOARD_STATE_DIR (defaults to the systemd
+// The base dir is overridable via DASHBOARD_ASSISTANT_STATE_DIR (defaults to the systemd
 // StateDirectory); handy for tests and relocating state.
-var stateDir = envOr("DASHBOARD_STATE_DIR", "/var/lib/dashboard")
+var stateDir = envOr("DASHBOARD_ASSISTANT_STATE_DIR", "/var/lib/dashboard-assistant")
 
 var (
 	runtimeEnv  = stateDir + "/runtime.env"
@@ -139,7 +139,7 @@ func clearProvisioned() error {
 }
 
 // restartKiosk restarts the greetd session over the systemd D-Bus API. A scoped
-// polkit rule (see daemon.nix) grants ha-dashboard rights to manage only this
+// polkit rule (see daemon.nix) grants dashboard-assistant rights to manage only this
 // unit. Restarting re-runs the state-aware launcher, which re-reads /api/state.
 func restartKiosk() error {
 	conn, err := dbus.ConnectSystemBus()
@@ -159,9 +159,9 @@ func restartKiosk() error {
 }
 
 // bootGeneration triggers a rollback+reboot into NixOS generation n by starting
-// the templated ha-rollback@<n>.service (which switches the profile, runs the
+// the templated dashboard-assistant-rollback@<n>.service (which switches the profile, runs the
 // generation's switch-to-configuration boot, and reboots — all as root). A
-// scoped polkit rule grants ha-dashboard rights to start just these units. The
+// scoped polkit rule grants dashboard-assistant rights to start just these units. The
 // number is validated by the caller and re-checked by the unit's script.
 func bootGeneration(n int) error {
 	conn, err := dbus.ConnectSystemBus()
@@ -170,7 +170,7 @@ func bootGeneration(n int) error {
 	}
 	defer conn.Close()
 
-	unit := fmt.Sprintf("ha-rollback@%d.service", n)
+	unit := fmt.Sprintf("dashboard-assistant-rollback@%d.service", n)
 	systemd := conn.Object("org.freedesktop.systemd1", "/org/freedesktop/systemd1")
 	var job dbus.ObjectPath
 	err = systemd.Call("org.freedesktop.systemd1.Manager.StartUnit", 0, unit, "replace").Store(&job)
@@ -180,14 +180,14 @@ func bootGeneration(n int) error {
 	return nil
 }
 
-// refPattern bounds the release tag we interpolate into the ha-update@ instance
+// refPattern bounds the release tag we interpolate into the dashboard-assistant-update@ instance
 // name (and, in the unit's script, into the flake ref). Tags are validated here
 // and re-validated by the script.
 var refPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 // startUpdate applies an OS update to release ref (a git tag) by starting the
-// templated, root-run ha-update@<ref>.service, which does the flake
-// `nixos-rebuild switch`. A scoped polkit rule grants ha-dashboard rights to
+// templated, root-run dashboard-assistant-update@<ref>.service, which does the flake
+// `nixos-rebuild switch`. A scoped polkit rule grants dashboard-assistant rights to
 // start just these units.
 //
 // It watches the start job over D-Bus and calls onDone with the job result once
@@ -219,7 +219,7 @@ func startUpdate(ref string, onDone func(result string)) error {
 	ch := make(chan *dbus.Signal, 16)
 	conn.Signal(ch)
 
-	unit := fmt.Sprintf("ha-update@%s.service", ref)
+	unit := fmt.Sprintf("dashboard-assistant-update@%s.service", ref)
 	var job dbus.ObjectPath
 	if err := systemd.Call("org.freedesktop.systemd1.Manager.StartUnit", 0, unit, "replace").Store(&job); err != nil {
 		conn.Close()

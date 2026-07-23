@@ -1,14 +1,14 @@
 # Build-time provisioning seed (development / known-network images).
 #
-# Setting dashboard.seed.haUrl bakes runtime.env and the `provisioned` marker
+# Setting dashboardAssistant.seed.haUrl bakes runtime.env and the `provisioned` marker
 # into the image, so first boot skips the setup wizard and goes straight to the
 # dashboard. This is Option 3 (pre-seed at flash time) expressed as Nix config.
 { config, lib, ... }:
 let
-  cfg = config.dashboard.seed;
+  cfg = config.dashboardAssistant.seed;
 in
 {
-  options.dashboard.seed = {
+  options.dashboardAssistant.seed = {
     haUrl = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -25,8 +25,8 @@ in
     # f+ = always create/truncate, so rebuilding with a new URL updates it.
     # (The dir itself is created by kiosk.nix.)
     systemd.tmpfiles.rules = [
-      "f+ /var/lib/dashboard/runtime.env 0664 ha-dashboard dashboard - HA_URL=${cfg.haUrl}"
-      "f+ /var/lib/dashboard/provisioned  0664 ha-dashboard dashboard - 1"
+      "f+ /var/lib/dashboard-assistant/runtime.env 0664 dashboard-assistant dashboard-assistant - HA_URL=${cfg.haUrl}"
+      "f+ /var/lib/dashboard-assistant/provisioned  0664 dashboard-assistant dashboard-assistant - 1"
     ];
   };
 }

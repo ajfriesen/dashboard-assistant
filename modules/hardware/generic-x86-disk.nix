@@ -36,8 +36,8 @@
 
   # In-place updates: build this config's toplevel from the release tag. The
   # boot-assessment auto-rollback below covers an update that won't come up.
-  dashboard.update.installable = true;
-  dashboard.update.flakeAttr = "dashboard-x86-disk";
+  dashboardAssistant.update.installable = true;
+  dashboardAssistant.update.flakeAttr = "dashboard-assistant-x86-disk";
 
   # Grow the root partition to fill the actual disk in early boot. Paired with
   # x-systemd.growfs on / (disk-layout.nix), a small 4G image expands to use the
@@ -75,7 +75,7 @@
     description = "Gate boot success on the dashboard being healthy";
     before = [ "boot-complete.target" ];
     requiredBy = [ "boot-complete.target" ];
-    after = [ "ha-dashboard-daemon.service" ];
+    after = [ "dashboard-assistant-daemon.service" ];
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;

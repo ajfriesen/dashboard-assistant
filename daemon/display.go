@@ -9,7 +9,7 @@ import (
 )
 
 // Display controls the physical panel/monitor power. The daemon runs as
-// `ha-dashboard`, but Sway's IPC socket lives under the kiosk user's 0700
+// `dashboard-assistant`, but Sway's IPC socket lives under the kiosk user's 0700
 // runtime dir, so we can't call swaymsg directly. Instead we write "on"/"off"
 // to a FIFO in the shared state dir (group `dashboard`); a small agent running
 // *inside* the Sway session reads it and runs `swaymsg output * power on/off`.
@@ -27,7 +27,7 @@ type Display struct {
 // The FIFO path can be overridden for testing off-device.
 func NewDisplay() *Display {
 	fifo := displayFifo
-	if v := os.Getenv("DASHBOARD_DISPLAY_FIFO"); v != "" {
+	if v := os.Getenv("DASHBOARD_ASSISTANT_DISPLAY_FIFO"); v != "" {
 		fifo = v
 	}
 	return &Display{on: true, brightness: 100, fifo: fifo}

@@ -13,7 +13,7 @@ import (
 // systemProfile is the NixOS system profile; its numbered "-N-link" siblings are
 // the bootable generations, and the symlink itself points at the current one.
 // All live under /nix, which is world-readable, so the unprivileged daemon can
-// enumerate them (rolling back needs root — see bootGeneration / ha-rollback@).
+// enumerate them (rolling back needs root — see bootGeneration / dashboard-assistant-rollback@).
 const systemProfile = "/nix/var/nix/profiles/system"
 
 // Generation is one bootable NixOS system generation.

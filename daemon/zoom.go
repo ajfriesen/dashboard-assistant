@@ -34,7 +34,7 @@ type Zoom struct {
 // overridden for testing off-device.
 func NewZoom() *Zoom {
 	fifo := zoomFifo
-	if v := os.Getenv("DASHBOARD_ZOOM_FIFO"); v != "" {
+	if v := os.Getenv("DASHBOARD_ASSISTANT_ZOOM_FIFO"); v != "" {
 		fifo = v
 	}
 	pct := loadZoom()

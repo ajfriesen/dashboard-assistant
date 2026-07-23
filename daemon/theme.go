@@ -27,7 +27,7 @@ type Theme struct {
 // overridden for testing off-device.
 func NewTheme() *Theme {
 	fifo := themeFifo
-	if v := os.Getenv("DASHBOARD_THEME_FIFO"); v != "" {
+	if v := os.Getenv("DASHBOARD_ASSISTANT_THEME_FIFO"); v != "" {
 		fifo = v
 	}
 	return &Theme{dark: loadTheme(), fifo: fifo}

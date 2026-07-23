@@ -99,13 +99,13 @@ func writeMQTTConfig(c MQTTConfig) error {
 func defaultNodeID() string {
 	if b, err := os.ReadFile("/etc/machine-id"); err == nil {
 		if id := strings.TrimSpace(string(b)); id != "" {
-			return "hadash_" + id[:min(12, len(id))]
+			return "da_" + id[:min(12, len(id))]
 		}
 	}
 	if h, err := os.Hostname(); err == nil && h != "" {
-		return "hadash_" + h
+		return "da_" + h
 	}
-	return "hadash"
+	return "da"
 }
 
 // Bridge publishes the dashboard to Home Assistant over MQTT and applies the
@@ -204,7 +204,7 @@ type Bridge struct {
 }
 
 func newBridge(cfg MQTTConfig, disp *Display, pages *Pages, act *Activity, upd *UpdateChecker, zoom *Zoom, theme *Theme) *Bridge {
-	base := "ha-dashboard/" + cfg.NodeID
+	base := "dashboard-assistant/" + cfg.NodeID
 	disco := func(kind, obj string) string {
 		return fmt.Sprintf("%s/%s/%s/%s/config", cfg.DiscoveryPrefix, kind, cfg.NodeID, obj)
 	}
@@ -290,7 +290,7 @@ func newBridge(cfg MQTTConfig, disp *Display, pages *Pages, act *Activity, upd *
 func (b *Bridge) start() {
 	opts := mqtt.NewClientOptions().
 		AddBroker(b.cfg.Broker).
-		SetClientID("ha-dashboard-"+b.cfg.NodeID).
+		SetClientID("dashboard-assistant-"+b.cfg.NodeID).
 		SetOrderMatters(false).
 		SetAutoReconnect(true).
 		SetConnectRetry(true).
@@ -742,22 +742,22 @@ func (b *Bridge) onConnect(client mqtt.Client) {
 }
 
 // device is the shared HA device all entities attach to, so the light, page
-// select and buttons group under one "HA Dashboard <node>" device.
+// select and buttons group under one "Dashboard Assistant <node>" device.
 func (b *Bridge) device() map[string]any {
 	return map[string]any{
 		"identifiers":  []string{b.cfg.NodeID},
-		"name":         "HA Dashboard " + b.cfg.NodeID,
-		"manufacturer": "ha-dashboard-os",
+		"name":         "Dashboard Assistant " + b.cfg.NodeID,
+		"manufacturer": "Dashboard Assistant",
 		"model":        "kiosk",
 	}
 }
 
 // Per-slot topics for the editable "Page N" text entities.
 func (b *Bridge) slotCmdTopic(i int) string {
-	return fmt.Sprintf("ha-dashboard/%s/page/slot/%d/set", b.cfg.NodeID, i)
+	return fmt.Sprintf("dashboard-assistant/%s/page/slot/%d/set", b.cfg.NodeID, i)
 }
 func (b *Bridge) slotStateTopic(i int) string {
-	return fmt.Sprintf("ha-dashboard/%s/page/slot/%d", b.cfg.NodeID, i)
+	return fmt.Sprintf("dashboard-assistant/%s/page/slot/%d", b.cfg.NodeID, i)
 }
 func (b *Bridge) slotDiscovery(i int) string {
 	return fmt.Sprintf("%s/text/%s/page_slot_%d/config", b.cfg.DiscoveryPrefix, b.cfg.NodeID, i)
@@ -932,7 +932,7 @@ func (b *Bridge) publishUpdate(client mqtt.Client) {
 }
 
 // onInstall applies the latest release when HA's Install button is pressed. It
-// marks the entity in-progress, starts the privileged ha-update@ unit, and
+// marks the entity in-progress, starts the privileged dashboard-assistant-update@ unit, and
 // clears/refreshes state from the job result. A successful switch usually
 // restarts the daemon, so the fresh process republishes clean state instead.
 func (b *Bridge) onInstall(client mqtt.Client, _ mqtt.Message) {

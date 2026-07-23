@@ -40,14 +40,14 @@ jobs:
         id: stage
         run: |
           set -euo pipefail
-          asset="ha-dashboard-$(date -u +%Y-%m-%d)-${GITHUB_SHA::7}-x86_64.raw.zst"
-          zstd -19 -T0 -c "$(readlink -f result)/ha-dashboard.raw" > "$asset"
+          asset="dashboard-assistant-$(date -u +%Y-%m-%d)-${GITHUB_SHA::7}-x86_64.raw.zst"
+          zstd -19 -T0 -c "$(readlink -f result)/dashboard-assistant.raw" > "$asset"
           echo "asset=$asset" >> "$GITHUB_OUTPUT"
 
       - name: Upload image artifact
         uses: actions/upload-artifact@v7
         with:
-          name: ha-dashboard-x86-image
+          name: dashboard-assistant-x86-image
           path: ${{ steps.stage.outputs.asset }}
           if-no-files-found: error
 

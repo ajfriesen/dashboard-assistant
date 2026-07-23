@@ -3,6 +3,23 @@ name: release
 # Publish a GitHub Release when a v* tag is pushed. The dashboards poll
 # /releases/latest to advertise the "latest" version, so a Release object (not
 # just a bare tag) must exist for the in-place update entity to offer it.
+#
+# We ship the flashable on-disk image (disko btrfs+zstd raw, zstd-compressed),
+# not the ephemeral live ISO — only the on-disk system persists OTA updates.
+# Even compressed it can approach GitHub's ~2 GiB per-asset cap as it grows, so
+# it is uploaded to a Cloudflare R2 bucket (egress is free) and linked from the
+# release notes instead. GitHub can't list an external file in the native
+# "Assets" box, so the download lives at the top of the release body above the
+# generated changelog.
+#
+# Required repo config (Settings -> Secrets and variables -> Actions):
+#   Variables:
+#     R2_ACCOUNT_ID   Cloudflare account id (forms the R2 S3 endpoint host)
+#     R2_BUCKET       bucket name, e.g. dashboard-assistant-images
+#     R2_PUBLIC_URL   public base URL of the bucket's custom domain (no trailing
+#                     slash), e.g. https://downloads.dashboard-assistant.dev
+#   Secrets:
+#     R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY   an R2 S3 API token
 on:
   push:
     tags:
@@ -13,18 +30,90 @@ permissions:
 
 jobs:
   release:
-    name: Publish GitHub release
+    name: Build disk image and publish release
     runs-on: ubuntu-latest
+    env:
+      ASSET: dashboard-assistant-${{ github.ref_name }}-x86_64.raw.zst
+      R2_ENDPOINT: https://${{ vars.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # full history so generated notes can diff from the last tag
 
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      # Fail fast if the tag and the version baked into the image disagree. The
+      # daemon reports the baked /etc/dashboard-assistant/version to HA and compares it
+      # against release tags (leading "v" stripped); a mismatch would ship an
+      # image that immediately flags an "update" against itself. Bump `version`
+      # in flake.nix in lockstep with the tag.
+      - name: Verify baked version matches tag
+        run: |
+          set -euo pipefail
+          baked=$(nix eval --raw \
+            '.#nixosConfigurations.dashboard-assistant-x86-disk.config.environment.etc."dashboard-assistant/version".text')
+          tag="${GITHUB_REF_NAME#v}"
+          echo "baked version = $baked, tag = $tag"
+          if [ "$baked" != "$tag" ]; then
+            echo "::error::flake.nix version ($baked) != release tag ($tag); bump it before tagging"
+            exit 1
+          fi
+
+      # Build first so a build failure aborts before we touch R2 or cut a
+      # release. This is the flashable on-disk system (disko btrfs+zstd raw
+      # image), not the ephemeral live ISO.
+      - name: Build x86_64 disk image
+        run: nix build .#disk-image
+
+      # Compress straight from the Nix store to the versioned name so we never
+      # keep a second uncompressed copy of the multi-GB raw on the runner. The
+      # payload is already zstd-compressed inside btrfs, so this mainly drops
+      # unallocated space; -T0 uses all cores and finishes in seconds.
+      - name: Compress disk image under a versioned name
+        run: |
+          set -euo pipefail
+          zstd -19 -T0 -c "$(readlink -f result)/dashboard-assistant.raw" > "$ASSET"
+
+      # aws CLI is preinstalled on ubuntu-latest. Push a versioned object plus a
+      # stable "latest" alias (mirrors GitHub's /releases/latest convention).
+      - name: Upload image to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          set -euo pipefail
+          bucket="${{ vars.R2_BUCKET }}"
+          aws s3 cp "$ASSET" "s3://$bucket/$ASSET" \
+            --endpoint-url "$R2_ENDPOINT"
+          aws s3 cp "$ASSET" "s3://$bucket/dashboard-assistant-latest-x86_64.raw.zst" \
+            --endpoint-url "$R2_ENDPOINT"
+
+      # Manual notes (the download block) go on top; --generate-notes appends the
+      # auto changelog below them.
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
+          url="${{ vars.R2_PUBLIC_URL }}/$ASSET"
+          size=$(du -h "$ASSET" | cut -f1)
+          notes=$(mktemp)
+          {
+            echo "## 📥 Download"
+            echo
+            echo "**[$ASSET]($url)** ($size) — x86_64 flashable disk image (zstd-compressed)"
+            echo
+            echo "Flash it to the target's internal disk (confirm the device first!):"
+            echo '```'
+            echo "curl -L \"$url\" | zstd -dc | sudo dd of=/dev/sdX bs=4M oflag=sync conv=fsync status=progress"
+            echo '```'
+          } > "$notes"
           gh release create "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \
             --title "$GITHUB_REF_NAME" \
+            --notes-file "$notes" \
             --generate-notes

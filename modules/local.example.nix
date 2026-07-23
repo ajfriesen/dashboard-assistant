@@ -17,17 +17,17 @@
 {
   # Home Assistant address to bake in. Presence of this value marks the device
   # "provisioned", so first boot goes straight to the dashboard and skips setup.
-  dashboard.seed.haUrl = "http://homeassistant.local:8123";
+  dashboardAssistant.seed.haUrl = "http://homeassistant.local:8123";
 
   # DEV ONLY: expose Chromium remote debugging on 127.0.0.1:9222 so you can drive
   # the kiosk browser from host DevTools over `just qemu-ssh` (tunnels 9222).
   # Lets you paste a long token/password with the host clipboard. Leave off for
   # real images.
-  # dashboard.debug.chromiumRemoteDebugging = true;
+  # dashboardAssistant.debug.chromiumRemoteDebugging = true;
 
   # DEV ONLY: allow root SSH login with these keys (needed for `just qemu-ssh` /
   # `just net-check`; the live ISO has no root password). Paste your pubkey(s).
-  # dashboard.debug.rootAuthorizedKeys = [
+  # dashboardAssistant.debug.rootAuthorizedKeys = [
   #   "ssh-ed25519 AAAA... you@host"
   # ];
 }

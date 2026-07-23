@@ -1,18 +1,18 @@
 # Seed File
 
 A **seed file** provisions a freshly flashed device without touching the
-on-screen setup wizard. Drop a `ha-dashboard.yaml` next to the image and the
+on-screen setup wizard. Drop a `dashboard-assistant.yaml` next to the image and the
 device picks up its Home Assistant URL, access token and Wi-Fi on first boot —
 handy for field deploys or flashing several tablets at once.
 
 !!! warning "Physical access = full trust"
-    Any USB stick carrying a `ha-dashboard.yaml` is applied automatically, and
+    Any USB stick carrying a `dashboard-assistant.yaml` is applied automatically, and
     the file holds a long-lived token in plain text. Only use seed files on
     hardware and networks you control, and wipe the stick afterwards.
 
 ## Populate Seed File
 
-Create a file named exactly `ha-dashboard.yaml`. Every key is optional — include
+Create a file named exactly `dashboard-assistant.yaml`. Every key is optional — include
 only what you want to provision:
 
 ```yaml
@@ -44,7 +44,7 @@ built with config import enabled (`dashboard.configImport.enable = true`).
 === "`ESP / boot partition`"
 
     The `/boot` partition is FAT and readable on any computer. After flashing,
-    mount it and copy `ha-dashboard.yaml` to its root.
+    mount it and copy `dashboard-assistant.yaml` to its root.
 
     It is imported once on first boot, while the device is still
     unprovisioned — so it seeds a fresh image without re-importing on every
@@ -52,7 +52,7 @@ built with config import enabled (`dashboard.configImport.enable = true`).
 
 === "`USB stick`"
 
-    Put `ha-dashboard.yaml` in the root of a normal USB stick (any filesystem
+    Put `dashboard-assistant.yaml` in the root of a normal USB stick (any filesystem
     the OS can mount) and plug it into a running device.
 
     Inserting the stick triggers an import immediately, so you can re-provision
