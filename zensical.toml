@@ -55,6 +55,7 @@ nav = [
       "about/features.md",
       "about/about.md",
   ]},
+  { "In Action" = "in-action.md" },
   { "Hardware Support" = "hardware-support.md" },
   {"Flash" = [
      "flash/flash.md",
@@ -103,7 +104,7 @@ nav = [
 # Read more:
 # - https://zensical.org/docs/customization/#extending-the-theme
 #
-#custom_dir = "overrides"
+custom_dir = "overrides"
 
 # With the "favicon" option you can set your own image to use as the icon
 # browsers will use in the browser title bar or tab bar. The path provided
@@ -320,9 +321,10 @@ toggle.name = "Switch to light mode"
 # ----------------------------------------------------------------------------
 # The "extra" section contains miscellaneous settings.
 # ----------------------------------------------------------------------------
-#[[project.extra.social]]
-#icon = "fontawesome/brands/github"
-#link = "https://github.com/user/repo"
+[[project.extra.social]]
+icon = "fontawesome/brands/github"
+link = "https://github.com/ajfriesen/dashboard-assistant"
+name = "Dashboard Assistant on GitHub"
 
 # ----------------------------------------------------------------------------
 # In this section you can configure the Markdown extensions that are used when

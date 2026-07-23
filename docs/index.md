@@ -9,8 +9,8 @@ point it at your Home Assistant, and get a self-contained wall dashboard that
 integrates back into HA over MQTT.
 
 <figure markdown="span">
-  ![Image title](https://dummyimage.com/600x400/){ width="300" }
-  <figcaption>Image caption</figcaption>
+  ![A tablet on the wall running a Home Assistant dashboard](img/website.jpg){ width="600" }
+  <figcaption>A wall tablet booted straight into a Home Assistant dashboard.</figcaption>
 </figure>
 
 ## Goals
