@@ -3,15 +3,18 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-  <title>HA Dashboard — Setup</title>
+  <title>Dashboard Assistant</title>
   <style>
     :root { color-scheme: dark; }
     * { box-sizing: border-box; }
     body {
       margin: 0; font-family: system-ui, sans-serif; background: #10151c; color: #e8edf2;
-      display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 5vh 4vw;
+      display: flex; justify-content: center; min-height: 100vh; padding: 5vh 4vw;
     }
-    .card { width: 100%; max-width: 560px; }
+    /* margin:auto centers the card vertically without clipping its top when a
+       panel grows taller than the viewport (unlike align-items:center), so the
+       sticky tab bar has something to scroll under. */
+    .card { width: 100%; max-width: 560px; margin: auto; }
     h1 { font-size: 1.6rem; margin: 0 0 1.5rem; }
     label { display: block; margin: 1rem 0 .35rem; font-size: .95rem; color: #9fb0c0; }
     input, select, button {
@@ -33,7 +36,14 @@
     .banner.hidden { display: none; }
     .toggle { margin-top: .9rem; }
     .toggle a { color: #6ea8fe; text-decoration: none; font-size: .9rem; cursor: pointer; }
-    .tabs { display: flex; gap: .5rem; margin: 0 0 1.25rem; }
+    /* Pinned to the top of the viewport so the tabs stay reachable while a long
+       panel scrolls underneath. The opaque background (matching the body) hides
+       content passing behind it; z-index keeps it above the panels. */
+    .tabs {
+      display: flex; gap: .5rem;
+      position: sticky; top: 0; z-index: 10;
+      background: #10151c; padding: .9rem 0; margin: 0 0 1.25rem;
+    }
     .tab {
       flex: 1; text-align: center; padding: .6rem 1rem; border-radius: 10px;
       background: #182029; border: 1px solid #2a3644; color: #9fb0c0;
@@ -49,7 +59,7 @@
 </head>
 <body>
   <div class="card">
-    <h1>Set up your dashboard</h1>
+    <h1>Dashboard Assistant</h1>
 
     <nav class="tabs">
       <a id="tab-btn-setup" class="tab active">Dashboard</a>
