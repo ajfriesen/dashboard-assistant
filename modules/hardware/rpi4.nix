@@ -28,12 +28,29 @@
   # ("kernel image not found") with a black screen.
   hardware.raspberry-pi.firmware.uboot.enable = true;
 
-  # sd-image-aarch64 pulls in the generic "all-hardware" initrd module list
-  # (dw-hdmi, analogix, …), but the downstream linux-rpi kernel builds SD/USB/
-  # ext4 straight into the kernel and doesn't ship many of those modules — so the
-  # initrd module-closure fails ("Module dw-hdmi not found"). Clear the list; the
-  # Pi kernel's built-ins are enough to find and mount the SD-card root.
-  boot.initrd.availableKernelModules = lib.mkForce [ ];
+  # sd-image-aarch64 sets hardware.enableAllHardware, which pulls in a broad
+  # initrd module list. That list is what makes the SD card usable: the SD host
+  # controllers and ext4 are built into the linux-rpi kernel (CONFIG_MMC_SDHCI/
+  # BCM2835/EXT4_FS=y), but the block layer that exposes the card as /dev/mmcblk0
+  # is a module (CONFIG_MMC_BLOCK=m). Drop it and the systemd stage-1 root device
+  # (/dev/disk/by-label/NIXOS_SD) never appears → boot times out in emergency mode.
+  #
+  # The catch: that same list also names DRM/SoC modules the linux-rpi kernel
+  # doesn't ship, so the initrd module-closure fails at build time ("Module
+  # dw-hdmi not found"). Rather than clearing the whole list (which also loses
+  # mmc_block), disable only the offending modules and keep everything else.
+  # See https://github.com/NixOS/nixpkgs/issues/154163
+  boot.initrd.availableKernelModules = {
+    dw-hdmi = lib.mkForce false;
+    dw-mipi-dsi = lib.mkForce false;
+    rockchipdrm = lib.mkForce false;
+    rockchip-rga = lib.mkForce false;
+    phy-rockchip-pcie = lib.mkForce false;
+    pcie-rockchip-host = lib.mkForce false;
+    pwm-sun4i = lib.mkForce false;
+    sun4i-drm = lib.mkForce false;
+    sun8i-mixer = lib.mkForce false;
+  };
 
   # Broad Wi-Fi / device firmware, plus the Pi's own firmware blobs.
   hardware.enableRedistributableFirmware = true;
