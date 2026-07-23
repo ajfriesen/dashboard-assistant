@@ -100,5 +100,5 @@ Not yet licensed. Until a `LICENSE` file is added, all rights are reserved.
 This project was created by Andrej Friesen in 2026.
 
 <a href="https://github.com/ajfriesen">
-  <img src="https://github.com/ajfriesen.png" width="100" style="border-radius: 50%;" alt="Andrej Friesen">
+  <img src="https://wsrv.nl/?url=github.com/ajfriesen.png&w=200&h=200&fit=cover&mask=circle" width="100" alt="Andrej Friesen">
 </a>
