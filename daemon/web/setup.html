@@ -100,7 +100,7 @@
 
       <div id="toggle" class="toggle hidden"></div>
 
-      <label for="haurl">Home Assistant address</label>
+      <label for="haurl">Home Assistant URL</label>
       <input id="haurl" type="url" inputmode="url" value="http://homeassistant.local:8123">
 
       <button id="submit" type="button">Connect</button>
@@ -233,7 +233,7 @@
 
     async function submit() {
       const ha_url = $("haurl").value.trim();
-      if (!ha_url) return msg("Enter your Home Assistant address.", "err");
+      if (!ha_url) return msg("Enter your Home Assistant URL.", "err");
 
       const body = { ha_url };
       if (mode === "wifi") {

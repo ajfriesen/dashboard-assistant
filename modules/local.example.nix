@@ -15,7 +15,7 @@
 # Seed those via the device's runtime.env or a build-time secret instead.
 { ... }:
 {
-  # Home Assistant address to bake in. Presence of this value marks the device
+  # Home Assistant URL to bake in. Presence of this value marks the device
   # "provisioned", so first boot goes straight to the dashboard and skips setup.
   dashboardAssistant.seed.haUrl = "http://homeassistant.local:8123";
 
