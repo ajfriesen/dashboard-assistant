@@ -62,6 +62,10 @@
     .msg { margin-top: 1rem; min-height: 1.4rem; font-size: .95rem; }
     .msg.err { color: #ff6b6b; }
     .msg.ok { color: #4ade80; }
+    .info { margin: 0; }
+    .info > div { display: flex; justify-content: space-between; gap: 1rem; padding: .65rem 0; border-bottom: 1px solid #1b2430; }
+    .info dt { color: #9fb0c0; font-size: .9rem; }
+    .info dd { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9rem; text-align: right; word-break: break-all; }
   </style>
 </head>
 <body>
@@ -73,6 +77,7 @@
     <nav class="tabs">
       <a id="tab-btn-setup" class="tab active">Dashboard</a>
       <a id="tab-btn-mqtt" class="tab">MQTT</a>
+      <a id="tab-btn-info" class="tab">Info</a>
       <a id="tab-btn-recovery" class="tab">Recovery</a>
     </nav>
   </header>
@@ -125,6 +130,12 @@
 
       <button id="mqttSave" type="button">Save MQTT settings</button>
       <div id="mqttMsg" class="msg"></div>
+    </div>
+
+    <div id="panel-info" class="hidden">
+      <p class="hint">Device identity and network details. Read-only.</p>
+      <dl id="infoRows" class="info"></dl>
+      <div id="infoMsg" class="msg"></div>
     </div>
 
     <div id="panel-recovery" class="hidden">
@@ -248,16 +259,18 @@
       }
     }
 
-    // Tabs: Dashboard (Wi-Fi + HA URL), MQTT, and Recovery.
+    // Tabs: Dashboard (Wi-Fi + HA URL), MQTT, Info, and Recovery.
     function showTab(name) {
-      for (const t of ["setup", "mqtt", "recovery"]) {
+      for (const t of ["setup", "mqtt", "info", "recovery"]) {
         $("panel-" + t).classList.toggle("hidden", name !== t);
         $("tab-btn-" + t).classList.toggle("active", name === t);
       }
       if (name === "mqtt") loadMQTT();
+      if (name === "info") loadInfo();
       if (name === "recovery") loadGenerations();
     }
     $("tab-btn-recovery").addEventListener("click", () => showTab("recovery"));
+    $("tab-btn-info").addEventListener("click", () => showTab("info"));
     $("tab-btn-setup").addEventListener("click", () => showTab("setup"));
     $("tab-btn-mqtt").addEventListener("click", () => showTab("mqtt"));
 
@@ -359,6 +372,41 @@
       }
     }
     $("genRollback").addEventListener("click", rollback);
+
+    // Info: read-only device identity + network details, refreshed each open.
+    const INFO_FIELDS = [
+      ["name", "Name"],
+      ["hostname", "Hostname"],
+      ["mac", "MAC address"],
+      ["ip", "IP address"],
+      ["machine_id", "Machine ID"],
+      ["node_id", "MQTT node ID"],
+      ["model", "Model"],
+      ["serial", "Serial"],
+      ["version", "Version"],
+      ["ha_url", "Home Assistant URL"],
+    ];
+    async function loadInfo() {
+      const box = $("infoRows");
+      box.innerHTML = "";
+      $("infoMsg").textContent = "";
+      try {
+        const d = await (await fetch("/api/info")).json();
+        for (const [k, label] of INFO_FIELDS) {
+          const row = document.createElement("div");
+          const dt = document.createElement("dt");
+          dt.textContent = label;
+          const dd = document.createElement("dd");
+          dd.textContent = d[k] || "—";
+          row.append(dt, dd);
+          box.appendChild(row);
+        }
+      } catch (e) {
+        const m = $("infoMsg");
+        m.textContent = "Could not load info: " + e.message;
+        m.className = "msg err";
+      }
+    }
 
     $("rescan").addEventListener("click", () => scan(true));
     $("submit").addEventListener("click", submit);

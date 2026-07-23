@@ -152,6 +152,46 @@ func hostname() string {
 	return "unknown"
 }
 
+// primaryMAC returns the MAC of the first physical NIC — the same selection the
+// set-hostname-from-mac service uses (a `device` symlink filters out lo/veth/…).
+// "" when none is found. os.ReadDir sorts entries, matching the service's glob.
+func primaryMAC() string {
+	entries, err := os.ReadDir("/sys/class/net")
+	if err != nil {
+		return ""
+	}
+	for _, e := range entries {
+		if e.Name() == "lo" {
+			continue
+		}
+		if _, err := os.Stat("/sys/class/net/" + e.Name() + "/device"); err != nil {
+			continue // virtual interface
+		}
+		if mac := sysStr("/sys/class/net/" + e.Name() + "/address"); mac != "" {
+			return mac
+		}
+	}
+	return ""
+}
+
+// macSuffix is the last 6 hex chars of the primary MAC (matching the hostname's
+// suffix), e.g. "45299a"; "" when unavailable.
+func macSuffix() string {
+	m := strings.ReplaceAll(primaryMAC(), ":", "")
+	if len(m) < 6 {
+		return m
+	}
+	return m[len(m)-6:]
+}
+
+// machineID is the stable per-install id from /etc/machine-id; "" if unreadable.
+func machineID() string {
+	if b, err := os.ReadFile("/etc/machine-id"); err == nil {
+		return strings.TrimSpace(string(b))
+	}
+	return ""
+}
+
 func readDMI(field string) string {
 	b, err := os.ReadFile("/sys/class/dmi/id/" + field)
 	if err != nil {

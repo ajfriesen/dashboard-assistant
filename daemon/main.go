@@ -119,6 +119,8 @@ func main() {
 	// Page navigation (waybar Prev/Next buttons). The page list itself is managed
 	// over MQTT (the "Page N" text slots), not through the web UI.
 	mux.Handle("/api/nav", loopbackOnly(http.HandlerFunc(srv.handleNav)))
+	// Read-only device info for the setup UI's Info tab (identity + network).
+	mux.Handle("/api/info", loopbackOnly(http.HandlerFunc(srv.handleInfo)))
 	// Recovery: list bootable generations and roll back into one (reboots).
 	mux.Handle("/api/generations", loopbackOnly(http.HandlerFunc(srv.handleGenerations)))
 	mux.Handle("/api/rollback", loopbackOnly(http.HandlerFunc(srv.handleRollback)))
@@ -357,6 +359,25 @@ func (s *server) handleNav(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"page": s.pages.CurrentLabel()})
+}
+
+// handleInfo returns read-only device identity + network details for the setup
+// UI's Info tab. The node id / machine id are surfaced here (rather than in the
+// device name) so they're discoverable without cluttering the label.
+func (s *server) handleInfo(w http.ResponseWriter, r *http.Request) {
+	haURL, _ := readHAURL()
+	writeJSON(w, http.StatusOK, map[string]string{
+		"name":       deviceName(),
+		"hostname":   hostname(),
+		"mac":        primaryMAC(),
+		"ip":         primaryIP(),
+		"machine_id": machineID(),
+		"node_id":    loadMQTTConfig().NodeID,
+		"model":      readModel(),
+		"serial":     readSerial(),
+		"version":    installedVersion(),
+		"ha_url":     haURL,
+	})
 }
 
 // handleGenerations lists the bootable NixOS generations for the recovery UI.

@@ -741,12 +741,23 @@ func (b *Bridge) onConnect(client mqtt.Client) {
 	}
 }
 
+// deviceName is the friendly HA/UI label: "Dashboard Assistant (<mac6>)", or
+// plain "Dashboard Assistant" when no MAC is available. The MAC suffix (matching
+// the hostname) distinguishes multiple kiosks without exposing the raw node id.
+func deviceName() string {
+	if s := macSuffix(); s != "" {
+		return "Dashboard Assistant (" + s + ")"
+	}
+	return "Dashboard Assistant"
+}
+
 // device is the shared HA device all entities attach to, so the light, page
-// select and buttons group under one "Dashboard Assistant <node>" device.
+// select and buttons group under one device. Identity rides on the node id
+// (identifiers/unique_id); the name is just a human label.
 func (b *Bridge) device() map[string]any {
 	return map[string]any{
 		"identifiers":  []string{b.cfg.NodeID},
-		"name":         "Dashboard Assistant " + b.cfg.NodeID,
+		"name":         deviceName(),
 		"manufacturer": "Dashboard Assistant",
 		"model":        "kiosk",
 	}
