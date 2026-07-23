@@ -43,7 +43,13 @@
       padding: .75rem 1.25rem;
       background: #182029; border-bottom: 1px solid #2a3644;
     }
-    .brand { font-size: 1.2rem; font-weight: 700; color: #e8edf2; white-space: nowrap; }
+    .brand {
+      display: inline-flex; align-items: center; gap: .5rem;
+      font-size: 1.2rem; font-weight: 700; color: #e8edf2; white-space: nowrap;
+    }
+    /* Inherits the brand text colour via fill:currentColor (the source svg's dark
+       #1f1f1f would be invisible on the bar). */
+    .brand svg { width: 1.5rem; height: 1.5rem; flex: none; }
     .tabs { display: flex; gap: .5rem; }
     .tab {
       text-align: center; padding: .55rem 1.1rem; border-radius: 10px;
@@ -60,7 +66,10 @@
 </head>
 <body>
   <header class="topbar">
-    <span class="brand">Dashboard Assistant</span>
+    <span class="brand">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960" fill="currentColor" aria-hidden="true"><path d="M593-80q-24 0-46-9t-39-26L304-320l33-34q14-14 34-19t40 0l69 20v-287q0-17 11.5-28.5T520-680q17 0 28.5 11.5T560-640v393l-98-28 103 103q6 6 13 9t15 3h167q33 0 56.5-23.5T840-240v-160q0-17 11.5-28.5T880-440q17 0 28.5 11.5T920-400v160q0 66-47 113T760-80H593Zm7-280v-160q0-17 11.5-28.5T640-560q17 0 28.5 11.5T680-520v160h-80Zm120 0v-120q0-17 11.5-28.5T760-520q17 0 28.5 11.5T800-480v120h-80Zm40 200H565h195Zm-600-40q-33 0-56.5-23.5T80-280v-480q0-33 23.5-56.5T160-840h600q33 0 56.5 23.5T840-760v160h-80v-160H160v480h72l79 80H160Z"/></svg>
+      Dashboard Assistant
+    </span>
     <nav class="tabs">
       <a id="tab-btn-setup" class="tab active">Dashboard</a>
       <a id="tab-btn-mqtt" class="tab">MQTT</a>
